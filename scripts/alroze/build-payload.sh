@@ -18,7 +18,10 @@ umask 022
 
 VERSION="${1:?usage: build-payload.sh <version> [--skip-build]}"
 SKIP_BUILD=false
-[ "${2:-}" = "--skip-build" ] && SKIP_BUILD=true
+case "${2:-}" in
+  --skip-build) SKIP_BUILD=true ;;
+  --install-only) SKIP_BUILD=install-only ;;  # redo step 6 from existing tarballs
+esac
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="${PAPERCLIP_FORK_BUILDS:-$HOME/paperclip-fork-builds}/$VERSION"
@@ -29,7 +32,9 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "error: tracked files are modified; commit or stash first" >&2
   exit 1
 fi
-if [ -e "$OUT" ]; then
+if [ "$SKIP_BUILD" = install-only ]; then
+  rm -rf "$OUT/payload"
+elif [ -e "$OUT" ]; then
   echo "error: $OUT already exists; pick a new version" >&2
   exit 1
 fi
@@ -41,8 +46,47 @@ restore_tree() {
 }
 trap restore_tree EXIT
 
+# Like the managed installer: depend on paperclipai only, and pin every
+# @paperclipai/* package (direct or transitive) to our tarballs via overrides.
+install_payload() {
+  mkdir -p "$OUT/payload"
+  cd "$OUT/payload"
+  node - "$OUT/tarballs" > package.json <<'EOF'
+const { readdirSync } = require("node:fs");
+const { execFileSync } = require("node:child_process");
+const dir = process.argv[2];
+const deps = {}, overrides = {};
+for (const f of readdirSync(dir).filter((f) => f.endsWith(".tgz"))) {
+  const pkg = JSON.parse(execFileSync("tar", ["-xzOf", `${dir}/${f}`, "package/package.json"]));
+  const spec = `file:${dir}/${f}`;
+  if (pkg.name === "paperclipai") deps[pkg.name] = spec; else overrides[pkg.name] = spec;
+}
+console.log(JSON.stringify({ dependencies: deps, overrides }, null, 2));
+EOF
+  npm install --no-audit --no-fund --omit=dev
+}
+
+verify_payload() {
+  local installed
+  installed="$(node -e "console.log(require('$OUT/payload/node_modules/paperclipai/package.json').version)")"
+  [ "$installed" = "$VERSION" ] || { echo "error: payload has paperclipai $installed, expected $VERSION" >&2; exit 1; }
+  # every @paperclipai package in the tree must be ours, never pulled from npm
+  local foreign
+  foreign="$(cd "$OUT/payload" && V="$VERSION" find node_modules -path '*/@paperclipai/*/package.json' -maxdepth 4 \
+    -exec node -e 'for (const f of process.argv.slice(1)) { const p = require(require("path").resolve(f)); if (p.version !== process.env.V) console.log(p.name + "@" + p.version) }' {} + 2>/dev/null | sort -u)"
+  [ -z "$foreign" ] || { echo "error: non-fork @paperclipai packages in payload:" >&2; echo "$foreign" >&2; exit 1; }
+  echo
+  echo "Payload ready: $OUT/payload  (paperclipai $installed, source $(cat "$OUT/SOURCE_COMMIT" 2>/dev/null || echo unknown))"
+}
+
+if [ "$SKIP_BUILD" = install-only ]; then
+  install_payload
+  verify_payload
+  exit 0
+fi
+
 echo "==> [1/6] Workspace build"
-$SKIP_BUILD || corepack pnpm build
+[ "$SKIP_BUILD" = true ] || corepack pnpm build
 
 echo "==> [2/6] Vendor runner daemon into server"
 runnerd="packages/paperclip-runner/dist/bin/paperclip-runnerd"
@@ -87,13 +131,6 @@ while IFS=$'\t' read -r pkg_dir pkg_name _ver; do
 done < <(node scripts/release-package-map.mjs list)
 
 echo "==> [6/6] Install payload"
-mkdir -p "$OUT/payload"
-cd "$OUT/payload"
-echo '{}' > package.json
-npm install --no-audit --no-fund --omit=dev "$OUT"/tarballs/*.tgz
+install_payload
 git -C "$REPO_ROOT" rev-parse HEAD > "$OUT/SOURCE_COMMIT"
-
-installed="$(node -e "console.log(require('$OUT/payload/node_modules/paperclipai/package.json').version)")"
-[ "$installed" = "$VERSION" ] || { echo "error: payload has paperclipai $installed, expected $VERSION" >&2; exit 1; }
-echo
-echo "Payload ready: $OUT/payload  (paperclipai $installed, source $(cat "$OUT/SOURCE_COMMIT"))"
+verify_payload
