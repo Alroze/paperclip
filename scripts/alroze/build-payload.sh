@@ -64,6 +64,10 @@ for (const f of readdirSync(dir).filter((f) => f.endsWith(".tgz"))) {
 console.log(JSON.stringify({ dependencies: deps, overrides }, null, 2));
 EOF
   npm install --no-audit --no-fund --omit=dev
+  # npm 11 skips install scripts by default. These two are required:
+  # embedded Postgres restores its lib symlinks, server installs Copilot assets.
+  npm install-scripts approve @embedded-postgres/linux-x64 @paperclipai/server
+  npm rebuild @embedded-postgres/linux-x64 @paperclipai/server
 }
 
 verify_payload() {
