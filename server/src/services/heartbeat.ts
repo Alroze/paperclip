@@ -2201,6 +2201,7 @@ export function heartbeatService(
         }
       | undefined;
     let managedAiRuntime: Awaited<ReturnType<typeof prepareManagedAiRuntime>> | undefined;
+    const schemaAiRuntimes: Array<Awaited<ReturnType<typeof prepareManagedAiRuntime>>> = [];
     let providerTraceCapture: Awaited<
       ReturnType<typeof traceStore.prepare>
     > | null = null;
@@ -2913,6 +2914,7 @@ export function heartbeatService(
         services: { secretsSvc, companySkills, appendRunEvent, finalizeAiConnectionBusyDeferral },
         onFailureSecretsResolved: (readSecrets) => { readFailureReportSecrets = () => [...readSecrets(), ...identityRedactor.values]; },
         onManagedAiRuntimeAcquired: (runtime) => { managedAiRuntime = runtime; },
+        onSchemaAiRuntimeAcquired: (runtime) => { schemaAiRuntimes.push(runtime); },
         onIdentityRedactorPrepared: (redactor) => { identityRedactor = redactor; },
       }));
       if (!executionConfiguration.prepared) return;
@@ -4112,6 +4114,7 @@ export function heartbeatService(
       let failedProcessCancellationSeen = failedProcessRunCancellations.has(run.id);
       await instructionWorkingCopy?.nativeInstructionReservation?.release().catch(error => logger.warn({ runId: run.id, err: error }, "Managed warm session preparation cleanup failed"));
       if (managedAiRuntime) await managedAiRuntime.cleanup().catch(() => logger.warn({ runId: run.id }, "AI connection refresh or cleanup failed"));
+      for (const runtime of schemaAiRuntimes.splice(0)) await runtime.cleanup().catch(() => logger.warn({ runId: run.id }, "AI connection setting cleanup failed"));
       let latestRun = await getRun(run.id).catch(() => null);
       if (preparationHandedOff() && (!latestRun || latestRun.status === "running")) nativeSessionResumeScheduled = true;
       try {

@@ -17,6 +17,7 @@ import { materializeIsolatedTaskDirectory } from "../isolated-task-directory.js"
 import { readConnectionFailure, type GitConnectionFailure } from "@paperclipai/adapter-utils/connection-failure";
 import { managedAiSessionFingerprintConfig } from "../ai-connection-runtime.js";
 import { paperclipRunnerSessionAdapterConfig, sessionAgentRuntimeConfig, sessionEnvironment } from "./session-fingerprint-inputs.js";
+import { stableAdapterAiConnectionConfig } from "../adapter-ai-connection-fields.js";
 import {
   PROJECT_REPOSITORIES_DIR,
   readGitWorkspaceSnapshot,
@@ -2870,7 +2871,7 @@ export async function buildEffectiveRunSessionConfigMetadata(input: {
     pathKind: "absolute", readPolicy: "root_bound", readable: input.managedInstructions.contentHash !== null,
     ...(input.managedInstructions.contentHash !== null ? { contentHash: input.managedInstructions.contentHash } : {}),
   } : await resolveInstructionsConfigFingerprintMetadata(input.effectiveAdapterConfig);
-  const effectiveAdapterConfig = { ...managedAiSessionFingerprintConfig(input.effectiveAdapterConfig, input.managedAiHome) };
+  const effectiveAdapterConfig = { ...stableAdapterAiConnectionConfig(managedAiSessionFingerprintConfig(input.effectiveAdapterConfig, input.managedAiHome)) };
   // Migration 0443 cleared the stored per_turn creation default from native
   // agents. Fingerprint an unset lifecycle as that stored value so clearing it
   // keeps saved task sessions and their provider history. An explicit change

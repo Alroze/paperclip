@@ -14,6 +14,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { ChevronDown } from "lucide-react";
 import { SchemaSecretField, isSchemaSecretField } from "./schema-secret-field";
+import { SchemaAiConnectionField, isSchemaAiConnectionField } from "./schema-ai-connection-field";
 
 // ── Select field (extracted to keep hooks at component top level) ──────
 function SelectField({
@@ -416,6 +417,16 @@ export function SchemaConfigFields({
         .filter((field) => !(field.type === "select" && /permissionMode/i.test(field.key) && (field.options?.length ?? 0) <= 1))
         .filter((field) => fieldMatchesVisibleWhen(field, readValue, schema))
         .map((field) => {
+          if (isSchemaAiConnectionField(field)) {
+            return (
+              <SchemaAiConnectionField
+                key={field.key}
+                field={field}
+                value={readValue(field)}
+                onChange={(v) => writeValue(field, v)}
+              />
+            );
+          }
           if (isSchemaSecretField(field)) {
             return (
               <SchemaSecretField
