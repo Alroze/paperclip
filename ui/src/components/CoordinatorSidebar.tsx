@@ -31,6 +31,9 @@ import { agentChatPinKey } from "./AgentChatPin";
 import { PinnedNavigationList, type PinnedNavigationItem } from "./PinnedNavigationList";
 import { companyProjectsQuery } from "@/lib/company-projects-query";
 import { SidebarProjectTasks } from "./SidebarProjectTasks";
+import { useCompany } from "@/context/CompanyContext";
+import { PluginSlotOutlet } from "@/plugins/slots";
+import { PluginLauncherOutlet } from "@/plugins/launchers";
 
 const NO_RECENT_TASKS: never[] = [];
 const TASK_PIN_ID_PATTERN = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -132,6 +135,8 @@ function RecentNavigationList({ children }: { children: ReactNode }) {
  * or task just because someone visits or switches agents. */
 export function CoordinatorSidebar({ children }: { children?: ReactNode }) {
   const { companyId, userId, agents, chats, session } = useAgentChatNavigation();
+  const { selectedCompany } = useCompany();
+  const pluginContext = { companyId: companyId ?? null, companyPrefix: selectedCompany?.issuePrefix ?? null };
   const unreadChatCount = chats.data?.filter(chat => chat.isUnreadForMe).length ?? 0;
   const pinnedNavigation = usePinnedNavigation(userId);
   const pinKeys = useMemo(() => new Set(pinnedNavigation.pins), [pinnedNavigation.pins]);
@@ -214,6 +219,10 @@ export function CoordinatorSidebar({ children }: { children?: ReactNode }) {
           </div>
           <SidebarNavItem className="design-sidebar-item" to="/decisions" label="Inbox" icon={Inbox} badge={attentionCount} badgeLabel="decisions" />
           {orderedPins.length > 0 && <PinnedNavigationList key={`${companyId}:${userId}`} items={orderedPins} userId={userId} onReorder={pinnedNavigation.reorder} onUnpin={pinnedNavigation.toggle} />}
+          <PluginSlotOutlet slotTypes={["sidebar"]} context={pluginContext} className="flex flex-col gap-0.5"
+            itemClassName="text-(length:--text-compact) font-medium" missingBehavior="placeholder" />
+          <PluginLauncherOutlet placementZones={["sidebar"]} context={pluginContext} className="flex flex-col gap-0.5"
+            itemClassName="text-(length:--text-compact) font-medium" />
         </div>
         <Flyout open={moreOpen} onOpenChange={setMoreOpen}>
           <FlyoutTrigger asChild><button type="button" aria-label="More workspace pages" className="design-sidebar-item flex w-auto items-center gap-2.5 rounded-lg py-1.5 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring"><MoreHorizontal className="size-4 shrink-0" /><span>More</span></button></FlyoutTrigger>
