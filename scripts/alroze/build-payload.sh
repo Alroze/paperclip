@@ -43,6 +43,7 @@ restore_tree() {
   cd "$REPO_ROOT"
   [ -f cli/package.dev.json ] && mv cli/package.dev.json cli/package.json
   git checkout -q -- .
+  rm -rf server/skills packages/adapters/claude-local/skills packages/adapters/codex-local/skills
 }
 trap restore_tree EXIT
 
