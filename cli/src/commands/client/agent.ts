@@ -88,6 +88,8 @@ interface AgentInstructionsFilePutOptions extends BaseClientOptions {
   path: string;
   content?: string;
   contentFile?: string;
+  baseHash?: string;
+  baseRevisionId?: string;
   clearLegacyPromptTemplate?: boolean;
 }
 
@@ -753,6 +755,8 @@ export function registerAgentCommands(program: Command): void {
       .requiredOption("--path <path>", "Bundle-relative file path")
       .option("--content <text>", "File content")
       .option("--content-file <path>", "Read file content from disk")
+      .option("--base-hash <hash>", "contentHash of the file version this edit is based on (from instructions-file:get)")
+      .option("--base-revision-id <id>", "Revision id this edit is based on; \"null\" for a new entry file")
       .option("--clear-legacy-prompt-template", "Clear legacy prompt template")
       .action(async (agentId: string, opts: AgentInstructionsFilePutOptions) => {
         try {
@@ -761,6 +765,8 @@ export function registerAgentCommands(program: Command): void {
           const payload = upsertAgentInstructionsFileSchema.parse({
             path: opts.path,
             content,
+            ...(opts.baseHash !== undefined ? { baseHash: opts.baseHash } : {}),
+            ...(opts.baseRevisionId !== undefined ? { baseRevisionId: opts.baseRevisionId === "null" ? null : opts.baseRevisionId } : {}),
             clearLegacyPromptTemplate: Boolean(opts.clearLegacyPromptTemplate),
           });
           const result = await ctx.api.put(apiPath`/api/agents/${agentId}/instructions-bundle/file`, payload);
