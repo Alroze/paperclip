@@ -142,6 +142,18 @@ describe("agent lifecycle commands", () => {
     ]);
   });
 
+  it("sends the base version when updating an instructions file", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    const hash = "e".repeat(64);
+    await run(["agent", "instructions-file:put", AGENT_ID, "--path", "AGENTS.md", "--content", "hello", "--base-hash", hash]);
+    await run(["agent", "instructions-file:put", AGENT_ID, "--path", "AGENTS.md", "--content", "hello", "--base-revision-id", "null"]);
+    expect(fetchMock.mock.calls.map(call => JSON.parse(call[1]?.body))).toEqual([
+      { path: "AGENTS.md", content: "hello", baseHash: hash, clearLegacyPromptTemplate: false },
+      { path: "AGENTS.md", content: "hello", baseRevisionId: null, clearLegacyPromptTemplate: false },
+    ]);
+  });
+
   it("refuses to delete an instructions file without confirmation", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse()));
     vi.stubGlobal("fetch", fetchMock);
