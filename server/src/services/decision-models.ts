@@ -392,9 +392,8 @@ export function decisionModelService(db: Db, options: { provider?: typeof runDec
     const [config, rows] = await Promise.all([settings(companyId), compatibleRows(companyId)]);
     let companyDefault = null;
     if (config.enabled && config.connectionId && config.model) {
-      const [row] = await db.select({ name: toolConnections.name }).from(toolConnections)
-        .where(and(eq(toolConnections.companyId, companyId), eq(toolConnections.id, config.connectionId)));
-      if (row) companyDefault = { connectionId: config.connectionId, name: row.name, model: config.model };
+      const row = rows.find(candidate => candidate.connection.id === config.connectionId && candidate.grant.id === config.grantId);
+      if (row) companyDefault = { connectionId: config.connectionId, name: row.connection.name, model: config.model };
     }
     return { companyDefault, connections: rows.map(row => ({ id: row.connection.id, name: row.connection.name, provider: row.route.provider, protocol: row.route.protocol })) };
   }
