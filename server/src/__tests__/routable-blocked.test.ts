@@ -38,6 +38,27 @@ describe("routable blocked notifications", () => {
     expect(markNotified).toHaveBeenCalledWith(now);
   });
 
+  it("does not wake the agent that set the block on itself, and records it as notified", async () => {
+    const wakeup = vi.fn(async () => undefined);
+    const markNotified = vi.fn(async () => undefined);
+    const now = new Date("2026-07-23T18:30:00.000Z");
+
+    await expect(deliverAgentUnblockNotification({ issue: blockedIssue(), wakeup, markNotified, actorAgentId: agentId, now: () => now }))
+      .resolves.toBe(false);
+    expect(wakeup).not.toHaveBeenCalled();
+    expect(markNotified).toHaveBeenCalledWith(now);
+  });
+
+  it("still wakes the named agent when another actor sets the block", async () => {
+    const wakeup = vi.fn(async () => undefined);
+    const markNotified = vi.fn(async () => undefined);
+
+    await expect(deliverAgentUnblockNotification({
+      issue: blockedIssue(), wakeup, markNotified, actorAgentId: "00000000-0000-4000-8000-000000000009",
+    })).resolves.toBe(true);
+    expect(wakeup).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves pre-existing blocked issues untouched", async () => {
     const wakeup = vi.fn(async () => undefined);
     const markNotified = vi.fn(async () => undefined);
