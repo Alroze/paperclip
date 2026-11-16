@@ -9,6 +9,7 @@ import { priorRecoveryApiReceipt, unresolvedRecoveryToolInvocation } from "./rec
 import { recordRunnerApiOutcome, runnerCallOutcomeMiddleware } from "../middleware/runner-call-outcome.js";
 import { RUNNER_API_CALL_HEADER } from "./native-runtime/runner-api-client.js";
 import { requestTaskRetry } from "./task-retry.js";
+import { getExecutionBlocker } from "./execution-blocker.js";
 import { HttpError } from "../errors.js";
 import { NativeChatReviewPresentationContentionError } from "./native-runtime/native-chat-review-presentation.js";
 import { readFreshWorkspaceReadiness } from "./fresh-workspace-continuation.js";
@@ -816,6 +817,31 @@ describe("durable task Retry admission", () => {
       expect(ancestry).toBeNull();
       expect(state).toEqual(systemRecovery);
     }
+  });
+  it("retries the assignee's blocking run when a later run on the task belongs to another agent", async () => {
+    const input = await seed();
+    const reviewerId = randomUUID();
+    await db.insert(agents).values({ id: reviewerId, companyId: input.companyId, name: "Reviewer", adapterType: "paperclip_runner", status: "idle" });
+    const [source] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, input.observedRunId));
+    await db.insert(heartbeatRuns).values({ id: randomUUID(), companyId: input.companyId, agentId: reviewerId, issueId: input.issueId,
+      status: "cancelled", contextSnapshot: { issueId: input.issueId }, finishedAt: new Date(),
+      createdAt: new Date(source.createdAt.getTime() + 60_000) });
+    expect(await requestTaskRetry(input)).toMatchObject({ accepted: false, stale: true });
+    await db.update(issues).set({ status: "todo" }).where(eq(issues.id, input.issueId));
+    await db.insert(issueRecoveryActions).values({
+      companyId: input.companyId, sourceIssueId: input.issueId, kind: "active_run_watchdog", status: "resolved",
+      ownerType: "board", cause: "legacy_execution_requires_reconciliation", fingerprint: randomUUID(),
+      nextAction: "Automatic recovery stopped.", resolvedAt: new Date(),
+      evidence: { runId: input.observedRunId, attempt: 1, adapterRecovery: "unsupported_or_unknown",
+        automaticRecovery: { runId: input.observedRunId, policy: "preserve_without_replay_v1", replay: "blocked", actionOutcome: "unknown" },
+        originalFailureCode: "adapter_failed" },
+    });
+    const blocked = await getExecutionBlocker(db, input.companyId, input.issueId);
+    expect(blocked).toMatchObject({ runId: input.observedRunId, canRetry: true });
+    const receipt = await requestTaskRetry({ ...input, idempotencyKey: randomUUID() });
+    expect(receipt).toMatchObject({ accepted: true, stale: false, observedRunId: input.observedRunId });
+    expect(await requestTaskRetry({ ...input, idempotencyKey: randomUUID(), observedRunId: randomUUID() }))
+      .toMatchObject({ accepted: false, stale: true });
   });
   it("does not resurrect completed tasks or retry an obsolete assignment", async () => {
     const input = await seed();
