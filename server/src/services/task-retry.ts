@@ -22,7 +22,7 @@ import { adapterExecutionControls } from "./adapter-execution-control.js";
 import { hasRequiredWorkspaceRecovery } from "./workspace-restore-recovery-state.js";
 import { deferredChatInputPredicate, resumeDeferredChatWake, unadmittedChatWakeupCondition } from "./durable-chat-wakeup.js";
 import { notifyDeferredExecutionWork } from "./deferred-execution-notifications.js";
-import { hasPendingRunCleanup } from "./execution-blocker.js";
+import { getExecutionBlocker, hasPendingRunCleanup } from "./execution-blocker.js";
 import { undeliveredContinuation } from "./fresh-continuation-retry-fold.js";
 import { PersistedExecutionWaitRefusal } from "./deferred-execution-wait.js";
 import { rearmExhaustedNativeFinalization } from "./native-runtime/exhausted-finalization-retry.js";
@@ -309,10 +309,18 @@ function admitTaskRetry(input: TaskRetryRequest) {
         observedRunId: intent?.sourceRunId ?? null, chatActionId: intent?.chatActionId,
         ...(coalescedRun?.status === "scheduled_retry" ? { scheduledRetryRunId: coalescedRun.id } : {}) };
     }
-    const [latest] = await tx.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.companyId, issue.companyId),
+    let [latest] = await tx.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.companyId, issue.companyId),
       or(eq(heartbeatRuns.issueId, issue.id), eq(heartbeatRuns.nativeIssueId, issue.id),
         sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${issue.id}`)))
       .orderBy(desc(heartbeatRuns.createdAt), desc(heartbeatRuns.id)).limit(1);
+    if (latest && issue.assigneeAgentId && latest.agentId !== issue.assigneeAgentId && input.observedRunId) {
+      const blocker = await getExecutionBlocker(db, issue.companyId, issue.id);
+      if (blocker?.canRetry && blocker.runId === input.observedRunId && blocker.agentId === issue.assigneeAgentId) {
+        const [blockingRun] = await tx.select().from(heartbeatRuns).where(and(
+          eq(heartbeatRuns.companyId, issue.companyId), eq(heartbeatRuns.id, blocker.runId)));
+        if (blockingRun?.agentId === issue.assigneeAgentId) latest = blockingRun;
+      }
+    }
     if (["done", "cancelled"].includes(issue.status) || !issue.assigneeAgentId || !latest ||
         latest.agentId !== issue.assigneeAgentId || input.observedRunId !== latest.id) {
       return { requestId: null, accepted: false, stale: true, observedRunId: latest?.id ?? null, chatActionId: undefined };
