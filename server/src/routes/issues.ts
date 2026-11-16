@@ -16220,6 +16220,7 @@ export function issueRoutes(
         await deliverAgentUnblockNotification({
           issue: blockedIssue,
           wakeup: heartbeat.wakeup,
+          actorAgentId: actor.agentId ?? null,
           markNotified: async (blockedOwnerNotifiedAt) => {
             ownerNotifiedAt = blockedOwnerNotifiedAt;
           },
