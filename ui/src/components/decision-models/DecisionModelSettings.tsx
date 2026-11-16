@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { DECISION_MODELS, type DecisionConnectionChoice, type DecisionModelSettings, type DecisionProvider, type DecisionResult, type UpdateDecisionModel } from "@paperclipai/shared";
+import { DECISION_MODELS, type DecisionConnectionChoice, type DecisionModelSettings, type DecisionResult, type NativeDecisionProvider, type UpdateDecisionModel } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { decisionModelsApi } from "@/api/decision-models";
 import { describeError } from "@/api/errors";
@@ -94,7 +94,7 @@ export function DecisionModelSettingsSection({ companyId }: { companyId: string 
   const query = useQuery({ queryKey: key, queryFn: () => decisionModelsApi.settings(companyId) });
   const view = useQueryView(query);
   const [adding, setAdding] = useState(false);
-  const [provider, setProvider] = useState<DecisionProvider | null>(null);
+  const [provider, setProvider] = useState<NativeDecisionProvider | null>(null);
   const [newlyConnectedId, setNewlyConnectedId] = useState<string | null>(null);
   const settingsRevision = JSON.stringify(query.data?.settings ?? { companyId });
   const test = useMutation({ mutationFn: (_revision: string) => decisionModelsApi.test(companyId), onSettled: () => { void client.invalidateQueries({ queryKey: ["decision-history", companyId] }); void client.invalidateQueries({ predicate: q => String(q.queryKey[0]).includes("cost") }); } });
@@ -123,10 +123,10 @@ export function DecisionModelSettingsSection({ companyId }: { companyId: string 
             const refreshed = await query.refetch();
             if ("connectionId" in result && result.connectionId && refreshed.data?.choices.some(row => row.id === result.connectionId)) setNewlyConnectedId(result.connectionId);
             setAdding(false);
-          }} /> : <ConnectionChoiceList choices={(Object.keys(DECISION_MODELS) as DecisionProvider[]).map(id => ({ id,
+          }} /> : <ConnectionChoiceList choices={(Object.keys(DECISION_MODELS) as NativeDecisionProvider[]).map(id => ({ id,
             name: id === "openai" ? "OpenAI" : "OpenRouter", description: DECISION_MODELS[id].name,
             icon: <AppLogo name={id === "openai" ? "OpenAI" : "OpenRouter"} brandKey={id} size={24} />,
-          }))} onSelect={id => setProvider(id as DecisionProvider)} />}
+          }))} onSelect={id => setProvider(id as NativeDecisionProvider)} />}
       </DialogContent>
     </Dialog>
   </>;
