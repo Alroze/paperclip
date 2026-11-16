@@ -6,7 +6,7 @@ export const choices: DecisionConnectionChoice[] = ["openai", "openrouter"].map(
   grantId: `20000000-0000-4000-8000-00000000000${i + 1}`,
   companyId, provider: provider as "openai" | "openrouter", method: "api_key", ownership: "shared",
   name: i === 0 ? "Company OpenAI" : "Company OpenRouter", isDefault: false, status: "connected",
-  decisionModel: i === 0 ? "gpt-6-luna" : "typesafe/jev-1.13",
+  decisionModel: i === 0 ? "gpt-6-luna" : "typesafe/jev-1.13", decisionProtocol: "decisions" as const,
 }));
 export const unconfigured: DecisionModelSettings = { companyId, enabled: false, allowBackground: true, connectionId: null, grantId: null, provider: null, model: null };
 export const configured: DecisionModelSettings = { ...unconfigured, enabled: true, connectionId: choices[0]!.id, grantId: choices[0]!.grantId, provider: "openai", model: "gpt-6-luna" };
