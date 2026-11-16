@@ -1,10 +1,14 @@
 import {
-  centsToUnits, unitsToCents,
-  type DecisionAnswer, type DecisionRequest, type DecisionRoute,
+  centsToUnits, decisionModelIdSchema, unitsToCents,
+  type DecisionAnswer, type DecisionModelList, type DecisionModelOption, type DecisionRequest, type DecisionRoute,
 } from "@paperclipai/shared";
 import type { DecisionProviderOutcome, DecisionProviderReceipt } from "./decision-model-provider.js";
 
+const OPENAI_MODELS_URL = "https://api.openai.com/v1/models";
+const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const MAX_REPLY_BYTES = 1_000_000;
+const MAX_MODEL_LIST_BYTES = 8_000_000;
+const MAX_MODELS = 1000;
 const MAX_OUTPUT_TOKENS = 2000;
 
 const record = (v: unknown): Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
@@ -146,4 +150,44 @@ export async function runGatewayDecision(input: {
   const text = replyText(protocol, payload);
   const answers = text ? parseGatewayAnswers(input.request, text) : null;
   return answers ? { answers, receipt } : { errorCode: "invalid_response", receipt };
+}
+
+function modelsUrl(route: DecisionRoute) {
+  if (route.provider === "openrouter") return OPENROUTER_MODELS_URL;
+  if (route.provider === "openai") return OPENAI_MODELS_URL;
+  return `${route.baseUrl}/models`;
+}
+
+export function normalizeModelList(payload: unknown, configured: DecisionModelOption[] = []): DecisionModelOption[] {
+  const rows = Array.isArray(record(payload).data) ? record(payload).data as unknown[] : Array.isArray(payload) ? payload : [];
+  const seen = new Set<string>();
+  const models: DecisionModelOption[] = [];
+  for (const raw of [...configured, ...rows]) {
+    const row = record(raw);
+    const id = decisionModelIdSchema.safeParse(row.id);
+    if (!id.success || seen.has(id.data)) continue;
+    const label = [row.name, row.display_name, row.label].find(v => typeof v === "string" && v.trim()) as string | undefined;
+    seen.add(id.data);
+    models.push({ id: id.data, name: (label ?? id.data).trim().slice(0, 200) });
+    if (models.length >= MAX_MODELS) break;
+  }
+  return models;
+}
+
+export async function listDecisionModels(input: {
+  route: DecisionRoute; apiKey: string; configured?: DecisionModelOption[]; signal?: AbortSignal;
+}, options: { fetch?: typeof fetch } = {}): Promise<DecisionModelList> {
+  const transport = options.fetch ?? fetch;
+  const signal = input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000);
+  const headers = input.route.provider === "openrouter" ? { accept: "application/json" } : gatewayHeaders(input.route, input.apiKey);
+  let response: Response;
+  try { response = await transport(modelsUrl(input.route), { method: "GET", headers, signal }); }
+  catch { return { models: [], errorCode: signal.aborted ? "timeout" : "provider_failed" }; }
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    const errorCode = response.status === 401 || response.status === 403 ? "provider_auth_failed" : response.status === 429 ? "provider_rate_limited" : "provider_failed";
+    return { models: [], errorCode };
+  }
+  try { return { models: normalizeModelList(await boundedJson(response, MAX_MODEL_LIST_BYTES), input.configured ?? []) }; }
+  catch { return { models: [], errorCode: signal.aborted ? "timeout" : "invalid_response" }; }
 }

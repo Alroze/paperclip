@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { DECISION_MODELS, DECISION_TEST_REQUEST, decisionProviderForConnection, decisionRouteForConnection, type DecisionRoute } from "@paperclipai/shared";
 import { decisionReceipt, runDecisionProvider } from "../services/decision-model-provider.js";
-import { parseGatewayAnswers } from "../services/decision-gateway.js";
+import { listDecisionModels, parseGatewayAnswers } from "../services/decision-gateway.js";
 
 function openaiResponse() {
   return { model: "gpt-6-luna", usage: { input_tokens: 123, output_tokens: 0 }, answers: [
@@ -147,5 +147,33 @@ describe("gateway decision fallback", () => {
   });
   it("rejects answers for a different question set", () => {
     expect(parseGatewayAnswers(DECISION_TEST_REQUEST, JSON.stringify({ billing: { probability: 1 } }))).toBeNull();
+  });
+});
+
+describe("decision model listing", () => {
+  it("lists OpenRouter models without a credential", async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ data: [{ id: "typesafe/jev-1.13", name: "Jev" }, { id: "bad id" }, { id: "typesafe/jev-1.13" }] }));
+    const result = await listDecisionModels({ route: { provider: "openrouter", protocol: "decisions", baseUrl: null, auth: "bearer", defaultModel: null }, apiKey: "" }, { fetch: transport });
+    expect(String(transport.mock.calls[0][0])).toBe("https://openrouter.ai/api/v1/models");
+    expect(new Headers(transport.mock.calls[0][1]?.headers).get("authorization")).toBeNull();
+    expect(result).toEqual({ models: [{ id: "typesafe/jev-1.13", name: "Jev" }] });
+  });
+  it("lists native OpenAI and gateway models with the bearer key", async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ data: [{ id: "gpt-6-luna" }, { id: "claude-y", display_name: "Claude Y" }] }));
+    expect(await listDecisionModels({ route: { provider: "openai", protocol: "decisions", baseUrl: null, auth: "bearer", defaultModel: null }, apiKey: "k1" }, { fetch: transport }))
+      .toEqual({ models: [{ id: "gpt-6-luna", name: "gpt-6-luna" }, { id: "claude-y", name: "Claude Y" }] });
+    expect(String(transport.mock.calls[0][0])).toBe("https://api.openai.com/v1/models");
+    await listDecisionModels({ route: chatRoute, apiKey: "k2", configured: [{ id: "pinned", name: "Pinned" }] }, { fetch: transport });
+    expect(String(transport.mock.calls[1][0])).toBe("https://gateway.example/v1/models");
+    expect(new Headers(transport.mock.calls[1][1]?.headers).get("authorization")).toBe("Bearer k2");
+  });
+  it.each([
+    [401, "provider_auth_failed"], [429, "provider_rate_limited"], [502, "provider_failed"],
+  ])("returns an empty list for HTTP %i", async (status, errorCode) => {
+    expect(await listDecisionModels({ route: chatRoute, apiKey: "k" }, { fetch: async () => new Response("PRIVATE", { status }) })).toEqual({ models: [], errorCode });
+  });
+  it("returns an empty list for invalid or oversized bodies", async () => {
+    expect(await listDecisionModels({ route: chatRoute, apiKey: "k" }, { fetch: async () => new Response("not json") })).toEqual({ models: [], errorCode: "invalid_response" });
+    expect(await listDecisionModels({ route: chatRoute, apiKey: "k" }, { fetch: async () => new Response("[]", { headers: { "content-length": "90000000" } }) })).toEqual({ models: [], errorCode: "invalid_response" });
   });
 });
