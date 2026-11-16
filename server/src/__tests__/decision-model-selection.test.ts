@@ -105,6 +105,10 @@ describe("decision model selection", () => {
       { id: f.openrouter.connectionId, name: "Router", provider: "openrouter", protocol: "decisions" },
     ]));
     expect(JSON.stringify(options)).not.toContain("key");
+    await db.update(toolConnections).set({ status: "archived", enabled: false }).where(eq(toolConnections.id, f.openrouter.connectionId));
+    const archived = await f.service.connectionOptions(f.companyId);
+    expect(archived.companyDefault).toBeNull();
+    expect(archived.connections.map(c => c.id)).not.toContain(f.openrouter.connectionId);
   });
   it("lists models through the connection and the manager route", async () => {
     const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ data: [{ id: "combo/fast", name: "Fast" }] }));
