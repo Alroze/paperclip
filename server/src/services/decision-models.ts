@@ -34,6 +34,13 @@ export function defineDecisionFeature(id: string, options: { background?: boolea
   return feature;
 }
 export const settingsDecisionTest = defineDecisionFeature("settings.test");
+const pluginFeatures = new Map<string, ReturnType<typeof defineDecisionFeature>>();
+export function pluginDecisionFeature(pluginKey: string) {
+  const id = `plugin.${pluginKey.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").slice(0, 93)}`;
+  let feature = pluginFeatures.get(id);
+  if (!feature) { feature = defineDecisionFeature(id, { background: true }); pluginFeatures.set(id, feature); }
+  return feature;
+}
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export interface DecisionContext {
   companyId: string;
