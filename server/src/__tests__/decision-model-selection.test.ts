@@ -4,12 +4,16 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { eq } from "drizzle-orm";
+import express from "express";
+import request from "supertest";
 import { createDb, companies, companyMemberships, costEvents, decisionInvocations, toolConnections } from "@paperclipai/db";
 import { startEmbeddedPostgresTestDatabase } from "@paperclipai/db/test-embedded-postgres";
 import { DECISION_TEST_REQUEST } from "@paperclipai/shared";
 import { aiConnectionService } from "../services/ai-connections.js";
 import { decisionModelService, defineDecisionFeature, type DecisionContext } from "../services/decision-models.js";
 import { decisionReceipt, type DecisionProviderOutcome } from "../services/decision-model-provider.js";
+import { decisionModelRoutes } from "../routes/decision-models.js";
+import { errorHandler } from "../middleware/index.js";
 
 let database: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
 let db: ReturnType<typeof createDb>;
@@ -26,7 +30,7 @@ beforeAll(async () => {
 }, 90000);
 afterAll(async () => { await database?.cleanup(); vi.unstubAllEnvs(); if (home) await rm(home, { recursive: true, force: true }); });
 let sequence = 0;
-async function fixture() {
+async function fixture(fetchImpl?: typeof fetch) {
   const companyId = randomUUID();
   await db.insert(companies).values({ id: companyId, name: "Decision selection", issuePrefix: `DS${++sequence}` });
   await db.insert(companyMemberships).values({ companyId, principalId: "alice", principalType: "user", status: "active", membershipRole: "owner" });
@@ -36,7 +40,7 @@ async function fixture() {
   const chat = await save({ provider: "openai", name: "Gateway chat", apiKey: "chat-key", routing: gatewayRouting("chat") });
   const messages = await save({ provider: "anthropic", name: "Gateway messages", apiKey: "messages-key", routing: gatewayRouting("messages") });
   const provider = vi.fn().mockResolvedValue(structuredClone(outcome));
-  const service = decisionModelService(db, { provider });
+  const service = decisionModelService(db, { provider, fetch: fetchImpl });
   const actor = { type: "board" as const, userId: "alice", source: "session" as const, companyIds: [companyId], memberships: [{ companyId, membershipRole: "owner", status: "active" }] };
   return { companyId, openrouter, chat, messages, provider, service, actor };
 }
@@ -101,5 +105,20 @@ describe("decision model selection", () => {
       { id: f.openrouter.connectionId, name: "Router", provider: "openrouter", protocol: "decisions" },
     ]));
     expect(JSON.stringify(options)).not.toContain("key");
+  });
+  it("lists models through the connection and the manager route", async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ data: [{ id: "combo/fast", name: "Fast" }] }));
+    const f = await fixture(transport);
+    const audit = { responsibleUserId: "alice", actorType: "user" as const, actorId: "alice" };
+    expect(await f.service.models(f.companyId, f.chat.connectionId, audit)).toEqual({ models: [{ id: "combo/fast", name: "Fast" }] });
+    expect(String(transport.mock.calls[0][0])).toBe("https://gateway.example/v1/models");
+    expect(new Headers(transport.mock.calls[0][1]?.headers).get("authorization")).toBe("Bearer chat-key");
+    expect(await f.service.models(f.companyId, randomUUID(), audit)).toEqual({ models: [], errorCode: "incompatible_connection" });
+    const app = express(); app.use(express.json());
+    app.use((req, _res, next) => { req.actor = f.actor as typeof req.actor; next(); });
+    app.use("/api", decisionModelRoutes(db)); app.use(errorHandler);
+    const url = `/api/companies/${f.companyId}/decision-model/models`;
+    expect((await request(app).get(url)).status).toBe(400);
+    expect((await request(app).get(`${url}?connectionId=${randomUUID()}`)).body).toEqual({ models: [], errorCode: "incompatible_connection" });
   });
 });

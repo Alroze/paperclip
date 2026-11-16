@@ -7,8 +7,8 @@ import {
 } from "@paperclipai/db";
 import {
   aiConnectionMetadataSchema, decisionModelIdSchema, decisionRouteForConnection, decisionRequestSchema, updateDecisionModelSchema,
-  centsToUnits, unitsToCents, type DecisionAvailability, type DecisionConnectionChoice, type DecisionHistoryEntry,
-  type DecisionModelSettings, type DecisionProtocol, type DecisionProvider, type DecisionRequest, type DecisionResult,
+  centsToUnits, unitsToCents, type DecisionAvailability, type DecisionConnectionChoice, type DecisionHistoryEntry, type DecisionModelList,
+  type DecisionModelSettings, type DecisionProtocol, type DecisionProvider, type DecisionRequest, type DecisionResult, type DecisionRoute,
   type DecisionUnavailableReason, type UpdateDecisionModel,
 } from "@paperclipai/shared";
 import { HttpError, forbidden, unprocessable } from "../errors.js";
@@ -23,6 +23,7 @@ import { applyCostCorrectionInTransaction } from "./accounting-corrections.js";
 import { queueBudgetEvaluation } from "./budget-evaluation-work.js";
 import { logActivity } from "./activity-log.js";
 import { decisionReceipt, runDecisionProvider, type DecisionProviderOutcome } from "./decision-model-provider.js";
+import { listDecisionModels } from "./decision-gateway.js";
 
 const registeredFeatures = new WeakSet<object>();
 /** Register once in a server module. Feature handles cannot be supplied over JSON/API. */
@@ -65,7 +66,7 @@ function costProvider(provider: string, model: string) {
   return "openai";
 }
 
-export function decisionModelService(db: Db, options: { provider?: typeof runDecisionProvider; budgetHooks?: BudgetServiceHooks } = {}) {
+export function decisionModelService(db: Db, options: { provider?: typeof runDecisionProvider; budgetHooks?: BudgetServiceHooks; fetch?: typeof fetch } = {}) {
   const providerCall = options.provider ?? runDecisionProvider;
   async function compatibleRows(companyId: string, executor: Db = db) {
     const rows = await executor.select({ connection: toolConnections, grant: connectionGrants }).from(toolConnections)
@@ -390,5 +391,17 @@ export function decisionModelService(db: Db, options: { provider?: typeof runDec
     }
     return { companyDefault, connections: rows.map(row => ({ id: row.connection.id, name: row.connection.name, provider: row.route.provider, protocol: row.route.protocol })) };
   }
-  return { settings, choices, configure, availability, availabilityForRequest, decide, recoverInterrupted, history, connectionOptions };
+  async function models(companyId: string, connectionId: string, audit: { responsibleUserId: string | null; actorType: "user" | "system"; actorId: string }, signal?: AbortSignal): Promise<DecisionModelList> {
+    if (!UUID.test(connectionId)) return { models: [], errorCode: "incompatible_connection" };
+    const row = (await compatibleRows(companyId)).find(candidate => candidate.connection.id === connectionId);
+    if (!row) return { models: [], errorCode: "incompatible_connection" };
+    let apiKey = "";
+    if (row.route.provider !== "openrouter") {
+      try { apiKey = await aiConnectionService(db).credential(row, 0, audit); }
+      catch { return { models: [], errorCode: "connection_unavailable" }; }
+    }
+    const route: DecisionRoute = row.route;
+    return listDecisionModels({ route, apiKey, signal, configured: row.configuredModels.map(model => ({ id: model.id, name: model.label ?? model.id })) }, { fetch: options.fetch });
+  }
+  return { settings, choices, configure, availability, availabilityForRequest, decide, recoverInterrupted, history, connectionOptions, models };
 }
