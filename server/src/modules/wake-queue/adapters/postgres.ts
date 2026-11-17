@@ -1305,6 +1305,7 @@ const issueAdmissionFields = {
   conversationState: issues.conversationState,
   status: issues.status,
   statusVersion: issues.statusVersion,
+  executionState: issues.executionState,
   projectId: issues.projectId,
   projectWorkspaceId: issues.projectWorkspaceId,
   executionWorkspaceId: issues.executionWorkspaceId,

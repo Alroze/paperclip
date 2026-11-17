@@ -17,6 +17,7 @@ import { reserveAutomaticRunStart } from "../recovery/automatic-run-brake.js";
 import { queuedRunDispatchFacts } from "./queued-run-line.js";
 import { QUEUED_RUN_ORDER_CONTEXT_KEYS } from "./queued-run-provenance.js";
 import { notifyExecutionRunWork } from "../execution-control-notifications.js";
+import { STAGE_HANDOFF_KEY, isCurrentStageHandoff, type StageHandoffIdentity } from "./stage-handoff.js";
 import { PersistedExecutionWaitRefusal, writeDeferredExecutionWait } from "../deferred-execution-wait.js";
 import { assignmentWakePayloadSql, isAssignmentWakePayload, notifyDeferredExecutionWork } from "../deferred-execution-notifications.js";
 import type { DeferredReceiptRecoveryOptions } from "../deferred-execution-notifications.js";
@@ -1089,6 +1090,7 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
       }
       return null;
     }
+    const stageIdentity = run.contextSnapshot?.[STAGE_HANDOFF_KEY] as StageHandoffIdentity | undefined;
     const [caseHandoffReceipt] = run.wakeupRequestId ? await db.select().from(caseHandoffs).where(and(
       eq(caseHandoffs.wakeupRequestId, run.wakeupRequestId), eq(caseHandoffs.companyId, run.companyId),
     )).limit(1) : [];
@@ -1415,11 +1417,26 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
       const [owner] = issueId ? await tx.select({
         assigneeAgentId: issues.assigneeAgentId,
         statusVersion: issues.statusVersion,
+        status: issues.status,
+        executionState: issues.executionState,
         executionRunId: issues.executionRunId,
         checkoutRunId: issues.checkoutRunId,
       }).from(issues).where(and(
         eq(issues.id, issueId), eq(issues.companyId, run.companyId),
       )).for("update") : [];
+      if (stageIdentity && (!owner || !isCurrentStageHandoff(owner, run.agentId, String(context.wakeReason), stageIdentity))) {
+        await notifyChatRunMilestones(tx, { companyId: run.companyId, runId: run.id, issueId: issueId ?? undefined });
+        await notifyInstructionCollection(tx, { companyId: run.companyId, runId: run.id });
+        await notifyExternalAgentSettlement(tx, { companyId: run.companyId, runId: run.id });
+        await notifyCancelledWorkspacePreservation(tx, { companyId: run.companyId, runId: run.id });
+        await notifyUnsafeWorkspaceExportRunChange(tx, run);
+        await tx.update(heartbeatRuns).set({ status: "cancelled", finishedAt: new Date(), updatedAt: new Date(),
+          errorCode: "execution_stage_superseded", error: "Stage handoff superseded before claim" })
+          .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, "queued")));
+        await tx.update(agentWakeupRequests).set({ status: "cancelled", finishedAt: new Date(), updatedAt: new Date() })
+          .where(and(eq(agentWakeupRequests.id, run.wakeupRequestId!), eq(agentWakeupRequests.status, "queued")));
+        return { ownsIssue: false, blocked: true };
+      }
       const ownsIssue = owner?.assigneeAgentId === run.agentId &&
         context.wakeReason !== "source_scoped_recovery_action";
       const [handoff] = issueId ? await tx.select().from(caseHandoffs).where(and(eq(caseHandoffs.companyId, run.companyId), eq(caseHandoffs.issueId, issueId),
@@ -1862,7 +1879,7 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
             updatedAt: claimedAt,
           };
           if (nativeReviewContext) {
-            if (run.scheduledRetryReason === "native_provider_overloaded") {
+            if (stageIdentity || run.scheduledRetryReason === "native_provider_overloaded") {
               const predecessor = await lockIssueExecutionClaim(tx);
               if (predecessor.blocked) return null;
             }
@@ -2110,6 +2127,30 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
 
   async function resumeDeferredExecutionReceipts(scope: DeferredReceiptRecoveryOptions = {}) {
     if ((await getSchedulingSuppression()).suppressed) return;
+    const stageReceipts = await db.select().from(agentWakeupRequests).where(and(
+      eq(agentWakeupRequests.status, "deferred_issue_execution"),
+      scope.companyId ? eq(agentWakeupRequests.companyId, scope.companyId) : undefined,
+      scope.requestId ? eq(agentWakeupRequests.id, scope.requestId) : undefined,
+      sql`${agentWakeupRequests.payload}->${STAGE_HANDOFF_KEY} is not null`,
+    )).orderBy(asc(agentWakeupRequests.requestedAt));
+    for (const receipt of stageReceipts) {
+      try {
+        // A later operator Stop consumes this obligation; cleanup cannot grant resume.
+        await enqueueWakeup(receipt.agentId, {
+          source: receipt.source as WakeupOptions["source"], triggerDetail: receipt.triggerDetail as WakeupOptions["triggerDetail"],
+          reason: receipt.reason, payload: receipt.payload,
+          requestedByActorType: receipt.requestedByActorType as WakeupOptions["requestedByActorType"],
+          requestedByActorId: receipt.requestedByActorId,
+          contextSnapshot: parseObject(receipt.payload?.[DEFERRED_WAKE_CONTEXT_KEY]),
+          stageHandoff: receipt.payload?.[STAGE_HANDOFF_KEY] as StageHandoffIdentity,
+        }, receipt.id);
+      } catch (error) {
+        if (!(error instanceof PersistedExecutionWaitRefusal)) {
+          scope.onError?.(error);
+          logger.warn({ requestId: receipt.id }, "stage handoff remains deferred after admission failure");
+        }
+      }
+    }
     await resumeExecutionWaitComments(scope);
     const cutoff = await getWorktreeExecutionCutoff();
     const pendingInterrupts = await db.select({ id: agentWakeupRequests.id, companyId: agentWakeupRequests.companyId })
@@ -2786,6 +2827,7 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
       delete payload.queuedCommentInterrupt;
       delete payload.manualUserWake;
       delete payload.taskRetry;
+      delete payload[STAGE_HANDOFF_KEY];
     }
     if (opts.manualUserWake) {
       if (opts.requestedByActorType !== "user" || !opts.requestedByActorId || opts.failedRunId) {
@@ -2793,6 +2835,8 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
       }
       payload = { ...payload, manualUserWake: true };
     }
+    delete contextSnapshot[STAGE_HANDOFF_KEY];
+    if (opts.stageHandoff) contextSnapshot[STAGE_HANDOFF_KEY] = opts.stageHandoff;
     const executionReconciliationWake =
       contextSnapshot.source === "execution.reconciled" ||
       opts.idempotencyKey?.startsWith("execution-reconciliation:") === true;
@@ -2827,7 +2871,7 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
     // A run's merged context cannot establish which caller authored one receipt.
     // Overwrite caller-supplied nested context rather than trusting it.
     payload = withInteractionDeliveryOrigin(
-      { ...payload, [DEFERRED_WAKE_CONTEXT_KEY]: { ...enrichedContextSnapshot } },
+      { ...payload, [DEFERRED_WAKE_CONTEXT_KEY]: { ...enrichedContextSnapshot }, ...(opts.stageHandoff ? { [STAGE_HANDOFF_KEY]: opts.stageHandoff } : {}) },
       opts.requestedByActorType, opts.requestedByActorId, savedInteractionOrigin, opts.requestedByActorCompanyId,
     );
     let issueId =
@@ -3524,7 +3568,7 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
               eq(agentWakeupRequests.agentId, agentId), eq(agentWakeupRequests.status, "deferred_issue_execution"),
               // A user message can join a queue originally created by a
               // system wake. Admission validates the saved user comment or board click.
-              (opts.queuedCommentInterruptId ?? opts.queuedCommentRequestId) === executionWaitRequestId
+              opts.stageHandoff || (opts.queuedCommentInterruptId ?? opts.queuedCommentRequestId) === executionWaitRequestId
                 ? undefined : eq(agentWakeupRequests.requestedByActorType,
                     durableRequest ? opts.requestedByActorType ?? "" : "user"),
               opts.queuedCommentInterruptId === executionWaitRequestId
@@ -3535,10 +3579,29 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
             ));
             // The issue lock serializes cleanup callbacks and periodic workers.
             // An adopted, discarded, or edited receipt is no longer authority.
-            if (!pending || (!opts.taskRetryRequestId && !(wakeCommentId && queuedCommentIdsFromWakePayload(pending.payload).includes(wakeCommentId)) &&
+            const savedStage = parseObject(pending?.payload?.[STAGE_HANDOFF_KEY]);
+            const changedStageReceipt = opts.stageHandoff && (
+              savedStage.stateDigest !== opts.stageHandoff.stateDigest ||
+              savedStage.statusVersion !== opts.stageHandoff.statusVersion
+            );
+            if (!pending || changedStageReceipt || (!opts.stageHandoff && !opts.taskRetryRequestId && !(wakeCommentId && queuedCommentIdsFromWakePayload(pending.payload).includes(wakeCommentId)) &&
                 !(opts.queuedCommentInterruptId && await readQueuedInteractionResponse(tx as unknown as Db,
                   agent.companyId, issueId, pending.payload)))) {
               return { kind: "deferred" as const };
+            }
+            if (opts.stageHandoff) {
+              const [stopped] = await tx.select({ id: heartbeatRuns.id }).from(heartbeatRuns).where(and(
+                eq(heartbeatRuns.companyId, agent.companyId), eq(heartbeatRuns.status, "cancelled"),
+                sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${issueId}`,
+                gte(heartbeatRuns.finishedAt, pending.requestedAt),
+                or(eq(heartbeatRuns.errorCode, "operator_interrupted"),
+                  sql`${heartbeatRuns.resultJson}->>'cancelledByActorType' in ('user', 'board')`),
+              )).limit(1);
+              if (stopped) {
+                await tx.update(agentWakeupRequests).set({ status: "cancelled", finishedAt: new Date(), updatedAt: new Date() })
+                  .where(and(eq(agentWakeupRequests.id, pending.id), eq(agentWakeupRequests.status, "deferred_issue_execution")));
+                return { kind: "skipped" as const };
+              }
             }
             if (opts.taskRetryRequestId && durableRequest?.failedRunRetry) {
               if (pending.id !== durableRequest.id || pending.payload?.taskRetryRequestId !== opts.taskRetryRequestId)
@@ -3799,6 +3862,23 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
             return { kind: "skipped" as const };
           }
 
+          if (opts.stageHandoff) {
+            if (!isCurrentStageHandoff(issue, agentId, reason, opts.stageHandoff)) {
+              if (executionWaitRequestId) await tx.update(agentWakeupRequests).set({
+                status: "cancelled", finishedAt: new Date(), updatedAt: new Date(), error: "Stage handoff superseded",
+              }).where(and(eq(agentWakeupRequests.id, executionWaitRequestId), eq(agentWakeupRequests.status, "deferred_issue_execution")));
+              return { kind: "skipped" as const };
+            }
+            // The issue lock serializes duplicate producer, cleanup, and restart delivery.
+            const [existing] = await tx.select().from(agentWakeupRequests).where(and(
+              eq(agentWakeupRequests.companyId, issue.companyId), eq(agentWakeupRequests.agentId, agentId),
+              sql`${agentWakeupRequests.payload}->>'issueId' = ${issue.id}`,
+              sql`${agentWakeupRequests.payload}->${STAGE_HANDOFF_KEY} = ${JSON.stringify(opts.stageHandoff)}::jsonb`,
+              executionWaitRequestId ? ne(agentWakeupRequests.id, executionWaitRequestId) : undefined,
+              ne(agentWakeupRequests.status, "skipped"),
+            )).limit(1);
+            if (existing) return { kind: "deferred" as const };
+          }
           if (taskRetryActorId) {
             assertTaskRetryConversationAllowed(issue, taskRetryActorId);
             if (await retireSupersededTaskRetry(tx as unknown as Db, {
@@ -4015,11 +4095,29 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
 
           let continuationWait = { reason: "execution_recovery", message: "Waiting for execution recovery. Your message is saved." };
           const deferBlockedExecution = async (
-            executionBlocker: Pick<NonNullable<Awaited<ReturnType<typeof getExecutionBlocker>>>, "recoveryActionId" | "cause" | "nextAction">,
+            executionBlocker: Pick<NonNullable<Awaited<ReturnType<typeof getExecutionBlocker>>>, "recoveryActionId" | "cause" | "nextAction"> & { runId?: string | null },
           ) => {
             if (caseRequest) waitForCaseAdmission("execution_reconciliation_required", executionBlocker.nextAction);
             opts.issueStateGuard?.onExecutionDeferred?.(executionBlocker.cause);
-            return recovery.defer({
+            // A review handoff can race the outgoing executor's lease cleanup.
+            // Keep the fixed gate code and owner IDs visible without logging
+            // task text, raw errors, credentials or the wake payload. This logs
+            // the admission decision, not a claim that the transaction committed.
+            if (reason === "execution_review_requested" || reason === "execution_approval_requested" ||
+                reason === "execution_changes_requested") {
+              logger.info({
+                event: "execution_stage_wake_held",
+                companyId: agent.companyId,
+                issueId: issue.id,
+                agentId,
+                wakeReason: reason,
+                gateReason: "execution_reconciliation_required",
+                blockerCause: executionBlocker.cause,
+                blockingRunId: executionBlocker.runId ?? null,
+                recoveryActionId: executionBlocker.recoveryActionId,
+              }, "execution stage wake held at admission");
+            }
+                        return recovery.defer({
               existingRequestId: executionWaitRequestId,
               commentId: wakeCommentId,
               contextSnapshot: enrichedContextSnapshot,
@@ -4027,6 +4125,7 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
               nextAction: executionBlocker.nextAction,
               coalesce: coalesceExecutionWait,
               publications: issueActivityPublications,
+              retain: Boolean(opts.stageHandoff),
               request: {
                 ...durableReceiptFields, agentId, source, triggerDetail, reason, payload,
                 requestedByActorType: opts.requestedByActorType ?? null,
@@ -4906,10 +5005,10 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
           );
           if (dailyCapBlock) {
             if (caseRequest) waitForCaseAdmission(dailyCapBlock.reason, "Case handoff is waiting for the agent's daily limit to clear");
-            if (executionWaitRequestId && executionBlocker) {
+            if (executionWaitRequestId && (executionBlocker || opts.stageHandoff)) {
               continuationWait = { reason: dailyCapBlock.reason,
                 message: "The agent has reached its daily limit. Your message is saved until work can resume." };
-              return deferBlockedExecution(executionBlocker);
+              return deferBlockedExecution(executionBlocker ?? continuationHold());
             }
             if (opts.idempotencyKey?.startsWith(CONVERSATION_COMMENT_KEY_PREFIX)) throw dailyLimitConversationRefusal(dailyCapBlock);
             const now = new Date();
@@ -4985,6 +5084,7 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
             durableChatReceiptId: durableRequest?.id,
             allowRunCoalescing: opts.allowRunCoalescing,
             executionWaitRequestId,
+            stageHandoff: Boolean(opts.stageHandoff),
             queuedCommentInterruptId: opts.queuedCommentInterruptId,
             queuedCommentRequestId: opts.queuedCommentRequestId,
             boardRetryReceiptId: failedChatRetry ? undefined : opts.taskRetryRequestId,

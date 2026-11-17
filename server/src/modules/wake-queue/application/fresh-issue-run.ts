@@ -65,6 +65,8 @@ type FreshIssueRunInput = {
   durableChatReceiptId?: string;
   allowRunCoalescing?: boolean;
   executionWaitRequestId?: string;
+  /** The resumed receipt is a stage handoff: promote it, never adopt it as a comment. */
+  stageHandoff?: boolean;
   queuedCommentInterruptId?: string;
   queuedCommentRequestId?: string;
   boardRetryReceiptId?: string;
@@ -99,8 +101,8 @@ export function createFreshIssueRunAdmission<Run extends { id: string }>(store: 
     const { agentId, source, triggerDetail, reason, payload } = receipt;
 
     // A deferred durable chat wake keeps its original identity and source.
-    const primary = await store.saveReceipt(durableChatReceiptId && durableChatReceiptId === executionWaitRequestId
-      ? { kind: "promote", wakeId: durableChatReceiptId, agentId, payload }
+    const primary = await store.saveReceipt(executionWaitRequestId && (input.stageHandoff || (durableChatReceiptId && durableChatReceiptId === executionWaitRequestId))
+      ? { kind: "promote", wakeId: executionWaitRequestId, agentId, payload }
       : {
           kind: "insert",
           seed: durableReceipt ? { ...receipt, id: durableReceipt.id, requestedAt: durableReceipt.requestedAt } : receipt,
@@ -124,7 +126,7 @@ export function createFreshIssueRunAdmission<Run extends { id: string }>(store: 
         : executionWaitRequestId ? { kind: "exact", wakeId: executionWaitRequestId } : null,
       checkExecutionBlocker: !input.ownsReconstructionContinuation,
     });
-    const adopted = candidates.filter((wake) => wake.id === executionWaitRequestId ||
+    const adopted = candidates.filter((wake) => (wake.id === executionWaitRequestId && !input.stageHandoff) ||
       wake.id === input.queuedCommentInterruptId || wake.id === input.queuedCommentRequestId ||
       isOrdinaryBoardComment(wake));
     const adoptedWakeIds = adopted.map((wake) => wake.id);

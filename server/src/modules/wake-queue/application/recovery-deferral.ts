@@ -22,7 +22,7 @@ export function createWakeRecoveryDeferral<Publication>(
   store: WakeRecoveryDeferralStore<Publication>,
 ) {
   return async function defer({
-    request, existingRequestId, commentId, contextSnapshot, condition, nextAction, coalesce, publications,
+    request, existingRequestId, commentId, contextSnapshot, condition, nextAction, coalesce, publications, retain,
   }: {
     request: ReceiptSeed;
     existingRequestId?: string;
@@ -32,12 +32,14 @@ export function createWakeRecoveryDeferral<Publication>(
     nextAction: string;
     coalesce: boolean;
     publications: Publication[];
+    /** A stage handoff is one-shot work; keep it saved until the hold clears. */
+    retain?: boolean;
   }): Promise<{ kind: "deferred"; admitted?: true }> {
     if (existingRequestId) {
       const saved = await store.updateWait({ requestId: existingRequestId, agentId: request.agentId, condition, publications });
       return saved ? { kind: "deferred", admitted: true } : { kind: "deferred" };
     }
-    if (durableChat || commentId || hasInteractionContinuationWakeContext(contextSnapshot) ||
+    if (retain || durableChat || commentId || hasInteractionContinuationWakeContext(contextSnapshot) ||
       readNonEmptyString(contextSnapshot.nativeStatusWakeIntentId)) {
       const commentIds = [...new Set([...queuedCommentIdsFromRunContext(contextSnapshot), ...(commentId ? [commentId] : [])])];
       await store.insertDeferred({
