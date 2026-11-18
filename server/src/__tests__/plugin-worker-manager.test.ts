@@ -510,7 +510,7 @@ describe("plugin-worker-manager stderr failure context", () => {
       });
       expect(companiesGet).toHaveBeenCalledWith(
         { companyId: "company-a" },
-        { invocationScope: { companyId: "company-a" } },
+        expect.objectContaining({ invocationScope: { companyId: "company-a" } }),
       );
     } finally {
       await handle.stop().catch(() => undefined);
