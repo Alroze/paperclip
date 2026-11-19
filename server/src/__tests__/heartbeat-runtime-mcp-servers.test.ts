@@ -31,6 +31,7 @@ import { buildPaperclipRuntimeMcpServers, createManagedMcpRunConfig } from "../s
 import { createToolGatewayService, ToolGatewayHttpError } from "../services/tool-gateway.js";
 
 import { toolAccessService } from "../services/tool-access.js";
+import { RUN_CREDENTIAL_MAX_TTL_MS } from "../run-credential-lifetime.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -166,8 +167,8 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
     for (const token of tokens) {
       expect(token.subjectType).toBe("heartbeat_run");
       expect(token.subjectId).toMatch(/^[0-9a-f-]{36}$/);
-      expect(token.expiresAt!.getTime()).toBeGreaterThanOrEqual(before + 59 * 60 * 1000);
-      expect(token.expiresAt!.getTime()).toBeLessThanOrEqual(Date.now() + 61 * 60 * 1000);
+      expect(token.expiresAt!.getTime()).toBeGreaterThanOrEqual(before + RUN_CREDENTIAL_MAX_TTL_MS - 60_000);
+      expect(token.expiresAt!.getTime()).toBeLessThanOrEqual(Date.now() + RUN_CREDENTIAL_MAX_TTL_MS + 60_000);
     }
     expect(JSON.stringify(tokens)).not.toContain(first[0]!.token);
 
@@ -302,6 +303,29 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
       .catch((error: unknown) => error);
     expect(rejection).toBeInstanceOf(ToolGatewayHttpError);
     expect((rejection as ToolGatewayHttpError).reasonCode).toBe("gateway_token_run_context_invalid");
+  });
+
+  it("keeps a run token usable past the former one hour lifetime until the run ends", async () => {
+    const [owner] = await seedAssignedAgents(1);
+    const [server] = await buildPaperclipRuntimeMcpServers({ db, agent: owner!.agent, runId: owner!.run.id });
+    const [gateway] = await db.select().from(toolMcpGateways);
+    const mintedAt = new Date(Date.now() - 90 * 60_000);
+    await db.update(toolMcpGatewayTokens).set({
+      createdAt: mintedAt,
+      expiresAt: new Date(mintedAt.getTime() + RUN_CREDENTIAL_MAX_TTL_MS),
+    });
+    const service = createToolGatewayService(db);
+
+    await expect(
+      service.initializeNamedGatewayProtocol({ gatewayId: gateway!.id, bearerToken: server!.token }),
+    ).resolves.toMatchObject({ agentId: owner!.agent.id, runId: owner!.run.id });
+
+    await db.update(heartbeatRuns).set({ status: "succeeded", finishedAt: new Date() }).where(eq(heartbeatRuns.id, owner!.run.id));
+    const rejection = await service
+      .initializeNamedGatewayProtocol({ gatewayId: gateway!.id, bearerToken: server!.token })
+      .catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(ToolGatewayHttpError);
+    expect((rejection as ToolGatewayHttpError).reasonCode).toBe("gateway_token_run_inactive");
   });
 
   it("binds a reused run-scoped gateway that was created without an agent", async () => {
