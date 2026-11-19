@@ -592,3 +592,29 @@ describe("interrupted Claude accounting", () => {
     expect(parsed.costUsd).toBeNull();
   });
 });
+
+describe("resumed session usage", () => {
+  // Real shape (Claude Code, resumed CEO session): modelUsage and total_cost_usd are
+  // session running totals; result.usage covers only this invocation.
+  const stdout = [
+    JSON.stringify({ type: "system", subtype: "init", session_id: "s1", model: "claude-opus-5-5" }),
+    JSON.stringify({ type: "assistant", session_id: "s1", message: { id: "m1", usage: { input_tokens: 3, cache_creation_input_tokens: 6398, cache_read_input_tokens: 224000, output_tokens: 60 }, content: [] } }),
+    JSON.stringify({ type: "result", session_id: "s1", result: "ok", total_cost_usd: 3.7340944,
+      usage: { input_tokens: 6, cache_creation_input_tokens: 6398, cache_read_input_tokens: 448999, output_tokens: 400 },
+      modelUsage: { "claude-opus-5-5": { inputTokens: 100, outputTokens: 28036, cacheReadInputTokens: 7210472, cacheCreationInputTokens: 216360, costUSD: 3.7340944 } } }),
+  ].join("\n");
+
+  it("takes this invocation's result.usage and no cumulative cost when resumed", () => {
+    const parsed = parseClaudeStreamJson(stdout, { resumed: true });
+    expect(parsed.usage).toEqual({ inputTokens: 6404, cachedInputTokens: 448999, outputTokens: 400 });
+    expect(parsed.costUsd).toBeNull();
+    expect(parsed.perRunModelUsage).toBe(false);
+  });
+
+  it("keeps modelUsage and the CLI cost for a fresh session", () => {
+    const parsed = parseClaudeStreamJson(stdout);
+    expect(parsed.usage?.outputTokens).toBe(28036);
+    expect(parsed.costUsd).toBe(3.7340944);
+    expect(parsed.perRunModelUsage).toBe(true);
+  });
+});

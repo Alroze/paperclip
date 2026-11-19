@@ -992,13 +992,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         });
       }
 
-      const consumeAccounting = createClaudeStreamParser();
+      const consumeAccounting = createClaudeStreamParser({ resumed: Boolean(resumeSessionId) });
       const accountingLog = createUsageCheckpointLog(onLog, ctx.onUsage, stdout => {
         const parsed = consumeAccounting(stdout);
         return { usage: parsed.usage ?? undefined, usageBasis: "per_run", costUsd: parsed.costUsd,
           provider: "anthropic", biller: isBedrockAuth(effectiveEnv) ? "aws_bedrock" : "anthropic",
           billingType, model: Object.keys(parseObject(parsed.resultJson?.modelUsage)).length > 1 ? "mixed" : parsed.model || model,
-            usageByModel: claudeModelReceipts(parsed.resultJson?.modelUsage), complete: parsed.resultJson !== null };
+            usageByModel: parsed.perRunModelUsage ? claudeModelReceipts(parsed.resultJson?.modelUsage) : undefined, complete: parsed.resultJson !== null };
       });
       const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
         onProcessStopped: providerStop.beginInvocation(),
@@ -1020,7 +1020,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       });
       await accountingLog.flush();
 
-      const parsedStream = parseClaudeStreamJson(proc.stdout);
+      const parsedStream = parseClaudeStreamJson(proc.stdout, { resumed: Boolean(resumeSessionId) });
       const parsed = parsedStream.resultJson ?? parseJson(proc.stdout);
       return { proc, parsedStream, parsed };
     };
@@ -1057,7 +1057,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           provider: "anthropic",
           biller: isBedrockAuth(effectiveEnv) ? "aws_bedrock" : "anthropic",
           model: Object.keys(parseObject(parsedStream.resultJson?.modelUsage)).length > 1 ? "mixed" : parsedStream.model || model,
-          usageByModel: claudeModelReceipts(parsedStream.resultJson?.modelUsage),
+          usageByModel: parsedStream.perRunModelUsage ? claudeModelReceipts(parsedStream.resultJson?.modelUsage) : undefined,
           billingType,
           costUsd: parsedStream.costUsd,
           errorMessage: `Timed out after ${timeoutSec}s`,
@@ -1127,7 +1127,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           provider: "anthropic",
           biller: isBedrockAuth(effectiveEnv) ? "aws_bedrock" : "anthropic",
           model: Object.keys(parseObject(parsedStream.resultJson?.modelUsage)).length > 1 ? "mixed" : parsedStream.model || model,
-          usageByModel: claudeModelReceipts(parsedStream.resultJson?.modelUsage),
+          usageByModel: parsedStream.perRunModelUsage ? claudeModelReceipts(parsedStream.resultJson?.modelUsage) : undefined,
           billingType,
           costUsd: parsedStream.costUsd,
           errorMessage: fallbackErrorMessage,
@@ -1154,7 +1154,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         };
       }
 
-      const fallbackModelUsageTotals = parsedStream.usage ? null : claudeModelUsageTotals(parsed.modelUsage);
+      const fallbackModelUsageTotals = parsedStream.usage || !parsedStream.perRunModelUsage ? null : claudeModelUsageTotals(parsed.modelUsage);
       const usage =
         parsedStream.usage ??
         fallbackModelUsageTotals ??
@@ -1309,7 +1309,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         retryNotBefore: transientRetryNotBefore ? transientRetryNotBefore.toISOString() : null,
         errorMeta,
         usage,
-        usageByModel: claudeModelReceipts(parsed.modelUsage),
+        usageByModel: parsedStream.perRunModelUsage ? claudeModelReceipts(parsed.modelUsage) : undefined,
         ...(usageBasis ? { usageBasis } : {}),
         sessionId: resolvedSessionId,
         sessionParams: resolvedSessionParams,
