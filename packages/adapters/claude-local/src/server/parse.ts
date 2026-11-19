@@ -66,12 +66,21 @@ export function claudeModelReceipts(modelUsage: unknown) {
   return receipts.every((part) => part !== null) ? receipts : undefined;
 }
 
-export function parseClaudeStreamJson(stdout: string) {
-  return createClaudeStreamParser()(stdout);
+export function parseClaudeStreamJson(stdout: string, opts: { resumed?: boolean } = {}) {
+  return createClaudeStreamParser(opts)(stdout);
 }
 
 /** Consume complete JSONL records once, retaining protocol accounting state. */
-export function createClaudeStreamParser() {
+/**
+ * On a resumed session (`--resume`), Claude Code restores the session's cost state, so
+ * `result.modelUsage` and `result.total_cost_usd` are running totals for the whole
+ * session, while `result.usage` covers only this invocation. Resumed runs therefore
+ * take `result.usage` and report no CLI cost or per-model split (the host prices
+ * metered runs from tokens); fresh sessions keep the per-model figures, which are
+ * per-run there.
+ */
+export function createClaudeStreamParser(opts: { resumed?: boolean } = {}) {
+  const resumed = opts.resumed === true;
   let sessionId: string | null = null;
   let model = "";
   let finalResult: Record<string, unknown> | null = null;
@@ -136,20 +145,24 @@ export function createClaudeStreamParser() {
         costUsd: null as number | null,
         usage: messageUsage.size ? { ...observedTotals } : null,
         usageBasis: "per_run" as const,
+        perRunModelUsage: !resumed,
         summary: assistantTexts.join("\n\n").trim(),
         resultJson: null as Record<string, unknown> | null,
       };
     }
 
-    const modelUsageTotals = claudeModelUsageTotals(finalResult.modelUsage);
+    const modelUsageTotals = resumed ? null : claudeModelUsageTotals(finalResult.modelUsage);
     const usageObj = parseObject(finalResult.usage);
-    const usage: UsageSummary = modelUsageTotals ?? {
+    const invocationUsage: UsageSummary | null = Object.keys(usageObj).length > 0 ? {
       inputTokens: asNumber(usageObj.input_tokens, 0) + asNumber(usageObj.cache_creation_input_tokens, 0),
       cachedInputTokens: asNumber(usageObj.cache_read_input_tokens, 0),
       outputTokens: asNumber(usageObj.output_tokens, 0),
-    };
+    } : null;
+    const usage: UsageSummary = modelUsageTotals ?? invocationUsage ?? (resumed && messageUsage.size ? { ...observedTotals } : {
+      inputTokens: 0, cachedInputTokens: 0, outputTokens: 0,
+    });
     const costRaw = finalResult.total_cost_usd;
-    const costUsd = typeof costRaw === "number" && Number.isFinite(costRaw) ? costRaw : null;
+    const costUsd = !resumed && typeof costRaw === "number" && Number.isFinite(costRaw) ? costRaw : null;
     const summary = asString(finalResult.result, assistantTexts.join("\n\n")).trim();
 
     return {
@@ -157,9 +170,10 @@ export function createClaudeStreamParser() {
       model,
       costUsd,
       usage,
-      // modelUsage covers exactly this CLI invocation, so mark it per-run to
-      // keep the server from applying its session-cumulative delta heuristic.
+      // Fresh session: modelUsage covers exactly this invocation. Resumed session:
+      // result.usage does. Either way the figures are per-run.
       usageBasis: "per_run" as const,
+      perRunModelUsage: !resumed,
       summary,
       resultJson: finalResult,
     };
