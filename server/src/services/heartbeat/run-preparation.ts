@@ -79,6 +79,7 @@ import type {
   AdapterRuntimeToolAccess,
 } from "../../adapters/index.js";
 import { createRuntimeToolsToken } from "../../runtime-tools-token.js";
+import { RUN_CREDENTIAL_MAX_TTL_MS } from "../../run-credential-lifetime.js";
 import { parseObject } from "../../adapters/utils.js";
 import {
   authorizeChatConversationForBoundRun,
@@ -1215,7 +1216,7 @@ export async function buildPaperclipRuntimeMcpServers(input: {
       clientLabel: `${input.agent.name} heartbeat run`,
       ownerNote: `Short-lived runtime MCP token for heartbeat run ${input.runId}.`,
       allowedActions: ["tools/list", "tools/call"],
-      expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+      expiresAt: new Date(Date.now() + RUN_CREDENTIAL_MAX_TTL_MS),
     },
     actor: { agentId: input.agent.id },
   });
@@ -1524,7 +1525,7 @@ export async function createManagedMcpRunConfig(input: {
   if (gateways.length === 0) return null;
 
   const service = createToolGatewayService(input.db);
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + RUN_CREDENTIAL_MAX_TTL_MS);
   const managedGateways: ManagedMcpGatewayRunConfig["gateways"] = [];
   for (const gateway of gateways) {
     const token = await service.createNamedGatewayToken({

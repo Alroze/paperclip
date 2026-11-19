@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { resolvePaperclipInstanceId } from "./home-paths.js";
+import { RUN_CREDENTIAL_MAX_TTL_SECONDS } from "./run-credential-lifetime.js";
 
 export interface RuntimeToolsTokenClaims {
   sub: string;
@@ -12,7 +13,7 @@ export interface RuntimeToolsTokenClaims {
   instance_id: string;
 }
 
-const TOKEN_TTL_SECONDS = 60 * 60;
+const TOKEN_TTL_SECONDS = RUN_CREDENTIAL_MAX_TTL_SECONDS;
 
 function secret() {
   return process.env.PAPERCLIP_AGENT_JWT_SECRET?.trim()
