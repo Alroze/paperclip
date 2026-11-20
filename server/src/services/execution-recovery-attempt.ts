@@ -2,7 +2,10 @@ import { RUNNER_REVISION_WAIT_RETRY_REASON } from "./runner-revision-mismatch.js
 import { STORAGE_UNAVAILABLE_WAIT_RETRY_REASON } from "../storage/storage-unavailable.js";
 import { ENVIRONMENT_PROVIDER_WAIT_RETRY_REASON } from "./environment-provider-wait.js";
 import { PROVIDER_ATTEMPT_CREDIT_GENERATION_LIMIT } from "./native-runtime/provider-attempt-outcome.js";
-import { AGENT_DIRECTORY_BUSY_RETRY_REASON } from "../modules/run-dispatch/index.js";
+// Import the leaf module, not the run-dispatch barrel: the barrel imports back into
+// heartbeat services, and loading this module first (for example through
+// routes/tool-gateway.js) would read the constant before it is initialized.
+import { AGENT_DIRECTORY_BUSY_RETRY_REASON } from "../modules/run-dispatch/domain/wake-context.js";
 
 /**
  * A preparation that a restart interrupted before any provider work started
