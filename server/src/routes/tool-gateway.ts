@@ -219,7 +219,11 @@ async function handleMcpGatewayProtocol(
         id,
         result: {
           content: [{ type: "text", text: contentText }],
-          structuredContent: resultRecord?.data ?? null,
+          // MCP requires structuredContent to be an object: a record `data` is the
+          // tool's structured result, anything else keeps the whole result record.
+          structuredContent: resultRecord?.data && typeof resultRecord.data === "object" && !Array.isArray(resultRecord.data)
+            ? resultRecord.data
+            : resultRecord ?? {},
           isError: false,
         },
       });
