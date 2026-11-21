@@ -11,6 +11,7 @@ import {
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { getExecutionBlocker } from "../services/execution-blocker.js";
 import { heartbeatService } from "../services/heartbeat.js";
+import { environmentService } from "../services/environments.js";
 import { legacyExecutionNeedsReconciliationWithEvidence, terminalizeLegacyExecution } from "../services/legacy-execution-recovery.js";
 
 const support = await getEmbeddedPostgresTestSupport();
@@ -139,6 +140,24 @@ const support = await getEmbeddedPostgresTestSupport();
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({ agentId: f.agentId, contextSnapshot: { wakeReason: f.wake.reason } });
     expect((await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, receipt.id)))[0])
+      .toMatchObject({ status: "queued", runId: runs[0].id });
+  });
+
+  it("makes a review wake blocked by an unreleased lease due when the lease is released, then admits it once", async () => {
+    const f = await stageFixture("review");
+    await heartbeatService(db).wakeup(f.agentId, f.wake);
+    const [saved] = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.companyId, f.companyId));
+    expect(saved).toMatchObject({ status: "deferred_issue_execution", runId: null, reason: "execution_review_requested" });
+    // The 30 s retry backoff has not elapsed; only the release event may make it due.
+    expect(Date.now() - saved.updatedAt.getTime()).toBeLessThan(30_000);
+    await environmentService(db).releaseLeasesForRun(f.predecessorRunId);
+    const [promoted] = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, saved.id));
+    expect(Date.now() - promoted.updatedAt.getTime()).toBeGreaterThanOrEqual(29_000);
+    await heartbeatService(db).resumeQueuedRuns();
+    await heartbeatService(db).resumeQueuedRuns();
+    const runs = await db.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.companyId, f.companyId), eq(heartbeatRuns.status, "queued")));
+    expect(runs).toHaveLength(1);
+    expect((await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, saved.id)))[0])
       .toMatchObject({ status: "queued", runId: runs[0].id });
   });
 
