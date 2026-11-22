@@ -425,3 +425,20 @@ export function buildActorSecretContext(
     responsibleUserId: req.actor.userId ?? req.actor.onBehalfOfUserId ?? null,
   };
 }
+
+/**
+ * Company owners/admins (and the local implicit board / instance admins) may
+ * approve a proposed secret into the company vault.
+ */
+export function hasSecretDefinitionAdminAccess(req: Request, companyId: string) {
+  assertBoard(req);
+  assertCompanyAccess(req, companyId);
+  if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return true;
+  const membership = req.actor.memberships?.find((item) => item.companyId === companyId);
+  return membership?.status === "active" && ["owner", "admin"].includes(String(membership.membershipRole));
+}
+
+export function assertSecretDefinitionAdmin(req: Request, companyId: string) {
+  if (hasSecretDefinitionAdminAccess(req, companyId)) return;
+  throw forbidden("Company admin access required");
+}
