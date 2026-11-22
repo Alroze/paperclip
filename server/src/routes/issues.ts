@@ -295,6 +295,7 @@ import { createRequestPromiseMemo } from "../lib/request-promise-memo.js";
 import {
   assertBoard,
   assertCompanyAccess,
+  assertSecretDefinitionAdmin,
   getAccessibleResource,
   getActorInfo,
   issueNotFoundBody,
@@ -18202,6 +18203,8 @@ export function issueRoutes(
                   actor: req.actor,
                   companyId: issue.companyId,
                   proposal: lockedProposal,
+                  assertSecretDefinitionAdmin: () =>
+                    assertSecretDefinitionAdmin(req, issue.companyId),
                 }),
             });
           }

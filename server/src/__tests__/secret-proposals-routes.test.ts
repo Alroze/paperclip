@@ -37,6 +37,7 @@ import { issueService } from "../services/issues.js";
 import { issueThreadInteractionService } from "../services/issue-thread-interactions.js";
 import { agentService } from "../services/agents.js";
 import { createSecretProposalsService } from "../services/secret-proposals.js";
+import { forbidden } from "../errors.js";
 import { secretService } from "../services/secrets.js";
 import {
   getEmbeddedPostgresTestSupport,
@@ -799,6 +800,47 @@ describeEmbeddedPostgres("secret proposal routes", () => {
         body: expect.stringContaining("GET /api/agents/me/secrets"),
       }),
     ]);
+  });
+
+  it("requires secret approval rights to cascade a pending secret proposal from a binding", async () => {
+    const fixture = await seedRun();
+    const secretResponse = await request(createAgentApp(fixture))
+      .post("/api/agents/me/secret-proposals")
+      .send({ kind: "secret", name: "dev/cascade-guard/token", value: "cascade-guard-secret", justification: "Needed" });
+    expect(secretResponse.status).toBe(201);
+    const bindingResponse = await request(createAgentApp(fixture))
+      .post("/api/agents/me/secret-proposals")
+      .send({
+        kind: "binding",
+        secretProposalId: secretResponse.body.id,
+        configPath: "access.CASCADE_GUARD",
+        justification: "Bind it",
+      });
+    expect(bindingResponse.status).toBe(201);
+
+    // A caller allowed to approve the binding but not the secret must not be
+    // able to create the secret through cascade.
+    const seen: string[] = [];
+    await expect(createSecretProposalsService(db).approve(fixture.companyId, bindingResponse.body.id, {
+      resolvedByUserId: "board-user",
+      cascade: true,
+      assertCanResolve: async (proposal) => {
+        seen.push(proposal.kind);
+        if (proposal.kind === "secret") throw forbidden("Company admin access required");
+      },
+    })).rejects.toMatchObject({ status: 403 });
+    expect(seen).toEqual(["binding", "secret"]);
+    expect(await db.select().from(companySecrets)).toHaveLength(0);
+    expect(await db.select().from(companySecretProposals)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: secretResponse.body.id, status: "pending" }),
+      expect.objectContaining({ id: bindingResponse.body.id, status: "pending" }),
+    ]));
+
+    const adminCascade = await request(createBoardApp(fixture))
+      .post(`/api/companies/${fixture.companyId}/secret-proposals/${bindingResponse.body.id}/approve`)
+      .send({ cascade: true });
+    expect(adminCascade.status).toBe(200);
+    expect(await db.select().from(companySecrets)).toHaveLength(1);
   });
 
   it("keeps an approved secret after binding fails and reuses it on retry", async () => {
