@@ -1775,7 +1775,7 @@ describe("issue thread interaction routes", () => {
     const res = await request(app).post(`/api/issues/${ISSUE_ID}/interactions/interaction-secret-fallback/accept`).send({});
     expect(res.status).toBe(200);
     expect(mockSecretProposals.approve).toHaveBeenCalledWith("company-1", proposalId,
-      expect.objectContaining({ resolvedByUserId: "local-board" }));
+      expect.objectContaining({ resolvedByUserId: "local-board", cascade: false }));
     expect(res.body.result.secretProposal.status).toBe("executed");
     expect.soft(mockIssueService.addComment).not.toHaveBeenCalled();
     expect.soft(mockHeartbeatService.wakeup).toHaveBeenCalledTimes(1);
@@ -1783,6 +1783,27 @@ describe("issue thread interaction routes", () => {
       contextSnapshot: expect.objectContaining({ issueId: ISSUE_ID, interactionId: "interaction-secret-fallback" }),
       payload: expect.objectContaining({ secretProposal: expect.objectContaining({ proposalId, executionStatus: "executed" }) }),
     }));
+  });
+
+  it("cascades the card acceptance to a still-pending secret proposal the binding depends on", async () => {
+    const proposalId = "66666666-6666-4666-8666-666666666666";
+    const secretProposalId = "77777777-7777-4777-8777-777777777777";
+    mockSecretProposals.getById.mockResolvedValue({ id: proposalId, kind: "binding", originIssueId: ISSUE_ID,
+      interactionId: "interaction-secret-cascade", configPath: "access.STAGING_TEST_A", secretProposalId });
+    mockSecretProposals.approve.mockResolvedValue({ status: "approved" });
+    mockInteractionService.acceptInteraction.mockResolvedValueOnce({ interaction: {
+      id: "interaction-secret-cascade", companyId: "company-1", issueId: ISSUE_ID,
+      kind: "request_confirmation", status: "accepted", continuationPolicy: "wake_assignee",
+      sourceRunId: RUN_1, payload: { version: 1, prompt: "Create binding?", secretProposal: {
+        version: 1, proposalId, configPath: "access.STAGING_TEST_A" } },
+      result: { version: 1, outcome: "accepted" },
+    }, createdIssues: [] });
+    const app = await createApp();
+    const res = await request(app).post(`/api/issues/${ISSUE_ID}/interactions/interaction-secret-cascade/accept`).send({});
+    expect(res.status).toBe(200);
+    expect(mockSecretProposals.approve).toHaveBeenCalledWith("company-1", proposalId,
+      expect.objectContaining({ resolvedByUserId: "local-board", cascade: true }));
+    expect(res.body.result.secretProposal.status).toBe("executed");
   });
 
   it("records a failed secret-proposal execution and posts a thread comment", async () => {
