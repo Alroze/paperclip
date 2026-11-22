@@ -18191,6 +18191,11 @@ export function issueRoutes(
             }
             await secretProposals.approve(issue.companyId, proposal.id, {
               resolvedByUserId,
+              // The card asks the human to confirm both the binding and the
+              // secret it points at. When that secret is still a pending
+              // proposal, approving it is part of the same decision; without
+              // cascade the service refuses with 409 every time (#14227).
+              cascade: Boolean(proposal.secretProposalId),
               assertCanResolve: (lockedProposal, txDb) =>
                 assertCanResolveProposal({
                   db: txDb,
