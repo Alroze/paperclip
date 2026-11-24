@@ -2288,6 +2288,22 @@ describe("Secrets operator-hidden tabs", () => {
     expect(mockSecretsApi.listProposals).not.toHaveBeenCalled();
   });
 
+  it("opens the Proposals tab from ?tab=proposals (inbox link, #22712)", async () => {
+    await renderSecrets(container, { path: "/?tab=proposals" });
+
+    const active = [...container.querySelectorAll('[role="tab"]')].find((tab) => tab.getAttribute("aria-selected") === "true");
+    expect(active?.textContent).toBe("Proposals");
+  });
+
+  it("ignores ?tab=proposals when the Proposals tab is hidden", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(queryKeys.health, { hiddenSettings: ["company.secrets.proposals"] } as never);
+    await renderSecrets(container, { path: "/?tab=proposals", queryClient });
+
+    const active = [...container.querySelectorAll('[role="tab"]')].find((tab) => tab.getAttribute("aria-selected") === "true");
+    expect(active?.textContent).toBe("Secrets");
+  });
+
   it("keeps both tabs when nothing is hidden", async () => {
     await renderWithHiddenSettings([]);
 

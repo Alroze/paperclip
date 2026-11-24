@@ -746,6 +746,14 @@ export function Secrets() {
   const [providerFilter, setProviderFilter] = useState<SecretProvider | "all">("all");
   const [providedByFilter, setProvidedByFilter] = useState<ProvidedByFilter>("all");
   const [searchParams, setSearchParams] = useSearchParams();
+  // `?tab=<tab>` opens that tab, e.g. the inbox links a pending secret proposal
+  // to `?tab=proposals` (#22712). Hidden tabs still fall back to "secrets" above.
+  const tabParam = searchParams.get("tab");
+  useEffect(() => {
+    if (tabParam === "secrets" || tabParam === "my-secrets" || tabParam === "vaults" || tabParam === "proposals") {
+      setActiveTab(tabParam);
+    }
+  }, [tabParam]);
   // The detail sheet is deep-linkable: `?secret=<id>` /
   // `?definition=<id>` are the source of truth for the current selection, so
   // every open secret has a shareable URL and Back closes the sheet.
