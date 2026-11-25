@@ -77,6 +77,7 @@ import {
   getActorInfo,
   hasCompanyAccess,
 } from "./authz.js";
+import { assertOperatorAgentMayEnable, assertPluginOperator, assertPluginReader } from "./plugin-operator-agents.js";
 import { validateInstanceConfig } from "../services/plugin-config-validator.js";
 import {
   findLocalFolderDeclaration,
@@ -890,7 +891,7 @@ export function pluginRoutes(
    * Response: `PluginRecord[]`
    */
   router.get("/plugins", async (req, res) => {
-    assertBoardOrgAccess(req);
+    assertPluginReader(req);
     const rawStatus = req.query.status;
     if (rawStatus !== undefined) {
       if (typeof rawStatus !== "string" || !(PLUGIN_STATUSES as readonly string[]).includes(rawStatus)) {
@@ -2023,7 +2024,7 @@ export function pluginRoutes(
    * Errors: 404 if plugin not found
    */
   router.get("/plugins/:pluginId", async (req, res) => {
-    assertBoardOrgAccess(req);
+    assertPluginReader(req);
     const { pluginId } = req.params;
     const plugin = await resolvePlugin(registry, pluginId);
     if (!plugin) {
@@ -2090,7 +2091,7 @@ export function pluginRoutes(
    * Errors: 404 if plugin not found, 400 for lifecycle errors
    */
   router.post("/plugins/:pluginId/enable", async (req, res) => {
-    assertInstanceAdmin(req);
+    assertPluginOperator(req);
     assertPluginManagementVisible();
     const { pluginId } = req.params;
 
@@ -2099,6 +2100,8 @@ export function pluginRoutes(
       res.status(404).json({ error: "Plugin not found" });
       return;
     }
+
+    assertOperatorAgentMayEnable(req, plugin.status);
 
     try {
       const result = await lifecycle.enable(plugin.id);
@@ -2129,7 +2132,7 @@ export function pluginRoutes(
    * Errors: 404 if plugin not found, 400 for lifecycle errors
    */
   router.post("/plugins/:pluginId/disable", async (req, res) => {
-    assertInstanceAdmin(req);
+    assertPluginOperator(req);
     assertPluginManagementVisible();
     const { pluginId } = req.params;
     const body = req.body as { reason?: string } | undefined;
@@ -2171,7 +2174,7 @@ export function pluginRoutes(
    * Errors: 404 if plugin not found
    */
   router.get("/plugins/:pluginId/health", async (req, res) => {
-    assertBoardOrgAccess(req);
+    assertPluginReader(req);
     const { pluginId } = req.params;
 
     const plugin = await resolvePlugin(registry, pluginId);
@@ -2301,7 +2304,7 @@ export function pluginRoutes(
    * Errors: 404 if plugin not found, 400 for lifecycle errors
    */
   router.post("/plugins/:pluginId/upgrade", async (req, res) => {
-    assertInstanceAdmin(req);
+    assertPluginOperator(req);
     assertPluginManagementVisible();
     const { pluginId } = req.params;
     const body = req.body as { version?: string } | undefined;
