@@ -39,7 +39,11 @@ const otherAgent = "88888888-8888-4888-8888-888888888888";
 const pluginId = "11111111-1111-4111-8111-111111111111";
 
 function agentActor(agentId: string, overrides: Record<string, unknown> = {}) {
-  return { type: "agent", agentId, companyId: companyA, runId: "55555555-5555-4555-8555-555555555555", source: "agent_jwt", ...overrides };
+  // Real agent requests always carry the run's responsible user (run JWT) or the key's (API key).
+  return {
+    type: "agent", agentId, companyId: companyA, runId: "55555555-5555-4555-8555-555555555555", source: "agent_jwt",
+    onBehalfOfUserId: "user-1", onBehalfOfMemberships: [], ...overrides,
+  };
 }
 
 async function createApp(actor: Record<string, unknown>) {
@@ -116,7 +120,6 @@ describe("plugin operator agents", () => {
 
   it.each([
     ["an agent that is not listed", agentActor(otherAgent)],
-    ["a listed agent acting for a user", agentActor(operatorAgent, { onBehalfOfUserId: "user-1" })],
   ])("refuses %s", async (_name, actor) => {
     plugin("ready");
     const { app } = await createApp(actor);

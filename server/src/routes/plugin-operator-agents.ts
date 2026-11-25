@@ -14,7 +14,6 @@ export function pluginOperatorAgentIds(env: NodeJS.ProcessEnv = process.env): Se
 export function isPluginOperatorAgent(req: Request, env: NodeJS.ProcessEnv = process.env): boolean {
   const actor = req.actor;
   if (actor?.type !== "agent" || !actor.agentId) return false;
-  if (actor.onBehalfOfUserId?.trim()) return false;
   return pluginOperatorAgentIds(env).has(actor.agentId);
 }
 
