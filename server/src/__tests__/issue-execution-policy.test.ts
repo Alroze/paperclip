@@ -2342,3 +2342,174 @@ describe("review round circuit breaker", () => {
     });
   });
 });
+
+describe("review round escalation to the CEO agent", () => {
+  const ceoAgentId = "99999999-9999-4999-8999-999999999999";
+  const policy = reviewOnlyPolicy();
+  const reviewStageId = policy.stages[0].id;
+
+  function pendingIssue(overrides: Record<string, unknown> = {}, stateOverrides: Record<string, unknown> = {}) {
+    return {
+      status: "in_review",
+      assigneeAgentId: qaAgentId,
+      assigneeUserId: null,
+      responsibleUserId: boardUserId,
+      executionPolicy: policy,
+      executionState: {
+        status: "pending",
+        currentStageId: reviewStageId,
+        currentStageIndex: 0,
+        currentStageType: "review",
+        currentParticipant: { type: "agent", agentId: qaAgentId },
+        returnAssignee: { type: "agent", agentId: coderAgentId },
+        completedStageIds: [],
+        lastDecisionId: null,
+        lastDecisionOutcome: null,
+        ...stateOverrides,
+      },
+      ...overrides,
+    };
+  }
+
+  const escalatedToCeo = (stateOverrides: Record<string, unknown> = {}) =>
+    pendingIssue(
+      { assigneeAgentId: ceoAgentId, assigneeUserId: null },
+      { currentParticipant: { type: "agent", agentId: ceoAgentId }, changesRequestedCount: 3, ...stateOverrides },
+    );
+
+  it("hands the stage to the CEO agent instead of the responsible human at the round cap", () => {
+    const result = applyIssueExecutionPolicyTransition({
+      issue: pendingIssue({}, { changesRequestedCount: 2 }),
+      policy,
+      requestedStatus: "in_progress",
+      requestedAssigneePatch: {},
+      actor: { agentId: qaAgentId },
+      commentBody: "Round three feedback",
+      reviewEscalationAgentId: ceoAgentId,
+    });
+
+    expect(result.decision).toMatchObject({ outcome: "changes_requested" });
+    expect(result.workflowControlledAssignment).toBe(true);
+    expect(result.patch.status).toBe("in_review");
+    expect(result.patch.assigneeAgentId).toBe(ceoAgentId);
+    expect(result.patch.assigneeUserId).toBeNull();
+    expect(result.patch.executionState).toMatchObject({
+      status: "pending",
+      currentStageId: reviewStageId,
+      currentParticipant: { type: "agent", agentId: ceoAgentId },
+      returnAssignee: { type: "agent", agentId: coderAgentId },
+      changesRequestedCount: 3,
+    });
+  });
+
+  it("escalates to the CEO agent even when no responsible human exists", () => {
+    const result = applyIssueExecutionPolicyTransition({
+      issue: pendingIssue({ responsibleUserId: null }, { changesRequestedCount: 2 }),
+      policy,
+      requestedStatus: "in_progress",
+      requestedAssigneePatch: {},
+      actor: { agentId: qaAgentId },
+      commentBody: "Round three feedback",
+      reviewEscalationAgentId: ceoAgentId,
+    });
+
+    expect(result.patch.assigneeAgentId).toBe(ceoAgentId);
+  });
+
+  it("falls back to the responsible human when the CEO is the reviewer asking for changes", () => {
+    const ceoPolicy = normalizeIssueExecutionPolicy({
+      stages: [{ type: "review", participants: [{ type: "agent", agentId: ceoAgentId }] }],
+    })!;
+    const result = applyIssueExecutionPolicyTransition({
+      issue: pendingIssue(
+        { assigneeAgentId: ceoAgentId, executionPolicy: ceoPolicy },
+        {
+          currentStageId: ceoPolicy.stages[0].id,
+          currentParticipant: { type: "agent", agentId: ceoAgentId },
+          changesRequestedCount: 2,
+        },
+      ),
+      policy: ceoPolicy,
+      requestedStatus: "in_progress",
+      requestedAssigneePatch: {},
+      actor: { agentId: ceoAgentId },
+      commentBody: "Round three feedback",
+      reviewEscalationAgentId: ceoAgentId,
+    });
+
+    expect(result.patch.assigneeUserId).toBe(boardUserId);
+    expect(result.patch.executionState).toMatchObject({
+      currentParticipant: { type: "user", userId: boardUserId },
+    });
+  });
+
+  it("falls back to the responsible human when the CEO wrote the change", () => {
+    const result = applyIssueExecutionPolicyTransition({
+      issue: pendingIssue({}, { changesRequestedCount: 2, returnAssignee: { type: "agent", agentId: ceoAgentId } }),
+      policy,
+      requestedStatus: "in_progress",
+      requestedAssigneePatch: {},
+      actor: { agentId: qaAgentId },
+      commentBody: "Round three feedback",
+      reviewEscalationAgentId: ceoAgentId,
+    });
+
+    expect(result.patch.assigneeUserId).toBe(boardUserId);
+  });
+
+  it("keeps the CEO hold sticky and refuses other agents advancing it", () => {
+    const sticky = applyIssueExecutionPolicyTransition({
+      issue: escalatedToCeo(),
+      policy,
+      requestedAssigneePatch: {},
+      actor: { agentId: coderAgentId },
+    });
+    expect(sticky.patch.executionState).toBeUndefined();
+    expect(sticky.patch.assigneeAgentId).toBeUndefined();
+
+    expect(() =>
+      applyIssueExecutionPolicyTransition({
+        issue: escalatedToCeo(),
+        policy,
+        requestedStatus: "done",
+        requestedAssigneePatch: {},
+        actor: { agentId: qaAgentId },
+        commentBody: "Reviewer trying to close it",
+      }),
+    ).toThrow("Only the escalated reviewer can advance the current execution stage");
+  });
+
+  it("resets the counter and returns to the implementer when the CEO requests changes", () => {
+    const result = applyIssueExecutionPolicyTransition({
+      issue: escalatedToCeo(),
+      policy,
+      requestedStatus: "in_progress",
+      requestedAssigneePatch: {},
+      actor: { agentId: ceoAgentId },
+      commentBody: "Fix the two findings, nothing else",
+      reviewEscalationAgentId: ceoAgentId,
+    });
+
+    expect(result.decision).toMatchObject({ outcome: "changes_requested" });
+    expect(result.patch.status).toBe("in_progress");
+    expect(result.patch.assigneeAgentId).toBe(coderAgentId);
+    expect(result.patch.executionState).toMatchObject({
+      status: "changes_requested",
+      changesRequestedCount: 0,
+    });
+  });
+
+  it("lets the CEO approve the escalated stage", () => {
+    const result = applyIssueExecutionPolicyTransition({
+      issue: escalatedToCeo(),
+      policy,
+      requestedStatus: "done",
+      requestedAssigneePatch: {},
+      actor: { agentId: ceoAgentId },
+      commentBody: "Findings are out of scope; approved",
+    });
+
+    expect(result.decision).toMatchObject({ outcome: "approved" });
+    expect(result.patch.executionState).toMatchObject({ status: "completed" });
+  });
+});

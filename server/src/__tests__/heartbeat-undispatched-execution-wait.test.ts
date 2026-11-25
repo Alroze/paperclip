@@ -108,10 +108,14 @@ const support = await getEmbeddedPostgresTestSupport();
       currentStageIndex: 0, currentStageType: kind === "approval" ? "approval" : "review",
       currentParticipant: { type: "agent", agentId: f.agentId, userId: null },
       returnAssignee: { type: "agent", agentId: f.agentId, userId: null }, reviewRequest: null,
-      completedStageIds: [], lastDecisionId: randomUUID(), lastDecisionOutcome: kind === "changes" ? "changes_requested" : null };
+      completedStageIds: [], lastDecisionId: randomUUID(), lastDecisionOutcome: kind === "changes" ? "changes_requested" : null,
+      ...(kind === "escalated" ? { lastDecisionOutcome: "changes_requested", changesRequestedCount: 3 } : {}) };
+    const stageParticipants = kind === "escalated"
+      ? [{ type: "agent", agentId: predecessorId, userId: null }]
+      : [state.currentParticipant];
     const [current] = await db.update(issues).set({ status: kind === "changes" ? "todo" : "in_review",
       executionState: state, executionPolicy: { mode: "normal", commentRequired: false,
-        stages: [{ id: state.currentStageId, type: state.currentStageType, participants: [state.currentParticipant] }] },
+        stages: [{ id: state.currentStageId, type: state.currentStageType, participants: stageParticipants }] },
     }).where(eq(issues.id, f.issueId)).returning();
     const [busy] = await db.insert(heartbeatRuns).values({ companyId: f.companyId, agentId: f.agentId, status: "running" }).returning();
     const reason = kind === "changes" ? "execution_changes_requested" : kind === "approval" ? "execution_approval_requested" : "execution_review_requested";
@@ -153,6 +157,20 @@ const support = await getEmbeddedPostgresTestSupport();
     await environmentService(db).releaseLeasesForRun(f.predecessorRunId);
     const [promoted] = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, saved.id));
     expect(Date.now() - promoted.updatedAt.getTime()).toBeGreaterThanOrEqual(29_000);
+    await heartbeatService(db).resumeQueuedRuns();
+    await heartbeatService(db).resumeQueuedRuns();
+    const runs = await db.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.companyId, f.companyId), eq(heartbeatRuns.status, "queued")));
+    expect(runs).toHaveLength(1);
+    expect((await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, saved.id)))[0])
+      .toMatchObject({ status: "queued", runId: runs[0].id });
+  });
+
+  it("keeps a review escalated to an agent outside the stage deferred while the lease is held, then admits it once", async () => {
+    const f = await stageFixture("escalated");
+    await heartbeatService(db).wakeup(f.agentId, f.wake);
+    const [saved] = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.companyId, f.companyId));
+    expect(saved).toMatchObject({ status: "deferred_issue_execution", runId: null, reason: "execution_review_requested" });
+    await environmentService(db).releaseLeasesForRun(f.predecessorRunId);
     await heartbeatService(db).resumeQueuedRuns();
     await heartbeatService(db).resumeQueuedRuns();
     const runs = await db.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.companyId, f.companyId), eq(heartbeatRuns.status, "queued")));

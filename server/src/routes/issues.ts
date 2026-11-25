@@ -3,6 +3,7 @@ import { isAppQuestionCardKey } from "../services/mcp-elicitation.js";
 import { listStalledDependencies } from "../services/recovery/blocker-stall-wakeups.js";
 import { confirmMcpAttachmentCleanup, recordMcpAttachmentCleanup, type McpAttachmentCleanup } from "../services/public-mcp/upload-cleanup.js";
 import { stageHandoffIdentity } from "../services/heartbeat/stage-handoff.js";
+import { reviewEscalationAgentId } from "../services/review-escalation-agent.js";
 import { notifyDeferredExecutionWork } from "../services/deferred-execution-notifications.js";
 import { notifyNativeRecoveryNotices } from "../services/native-recovery-notice-notifications.js";
 import { notifyNativeStatusReassessment } from "../services/native-status-reassessment-notifications.js";
@@ -15165,10 +15166,18 @@ export function issueRoutes(
         req.body.executionPolicy !== undefined && monitorChanged,
       );
 
+      const escalationAgentId =
+        expectedStatusVersion === undefined &&
+        existing.status === "in_review" &&
+        actor.actorType === "agent" &&
+        nextExecutionPolicy
+          ? await reviewEscalationAgentId(db, existing.companyId)
+          : null;
       const transition: ReturnType<typeof applyIssueExecutionPolicyTransition> = expectedStatusVersion !== undefined
         ? { patch: {} }
         : applyIssueExecutionPolicyTransition({
         issue: existing,
+        reviewEscalationAgentId: escalationAgentId,
         policy: nextExecutionPolicy,
         previousPolicy: previousExecutionPolicy,
         requestedStatus:

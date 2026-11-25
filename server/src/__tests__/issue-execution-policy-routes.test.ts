@@ -56,12 +56,14 @@ const mockDbSelectWhere = vi.hoisted(() => vi.fn(() => ({
 })));
 const mockDbSelectFrom = vi.hoisted(() => vi.fn((_table: unknown): { where: (...args: never[]) => unknown } => ({ where: mockDbSelectWhere })));
 const mockDbSelect = vi.hoisted(() => vi.fn(() => ({ from: mockDbSelectFrom })));
+const mockDecisionInsertValues = vi.hoisted(() => vi.fn(async (_row: unknown) => undefined));
 const mockDb = vi.hoisted(() => ({
   select: mockDbSelect,
-  transaction: vi.fn(async (callback: (tx: { select: typeof mockDbSelect }) => Promise<unknown>) =>
-    callback({ select: mockDbSelect })),
+  transaction: vi.fn(async (callback: (tx: { select: typeof mockDbSelect; insert: unknown }) => Promise<unknown>) =>
+    callback({ select: mockDbSelect, insert: () => ({ values: mockDecisionInsertValues }) })),
 }));
 
+const mockReviewEscalationAgentId = vi.hoisted(() => vi.fn(async (): Promise<string | null> => null));
 const mockLogActivity = vi.hoisted(() => vi.fn(async (_db: unknown, _input: unknown) => undefined));
 const mockIssueThreadInteractionService = vi.hoisted(() => ({
   expirePendingInteractionsForTerminalIssue: vi.fn(async () => []),
@@ -77,6 +79,9 @@ const mockRunnerGoalService = vi.hoisted(() => ({
 }));
 
 function registerModuleMocks() {
+  vi.doMock("../services/review-escalation-agent.js", () => ({
+    reviewEscalationAgentId: mockReviewEscalationAgentId,
+  }));
   vi.doMock("../services/queued-interaction-response.js", () => ({
     hasQueuedInteractionResponse: vi.fn(async () => false),
   }));
@@ -804,6 +809,95 @@ describe("issue execution policy routes", () => {
       }),
       expect.anything(),
     );
+  });
+
+  it("wakes the CEO agent through the stage handoff when agent review rounds run out", async () => {
+    const ceoAgentId = "99999999-9999-4999-8999-999999999999";
+    const reviewerAgentId = "33333333-3333-4333-8333-333333333333";
+    const coderAgentId = "44444444-4444-4444-8444-444444444444";
+    const policy = normalizeIssueExecutionPolicy({
+      stages: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          type: "review",
+          participants: [{ type: "agent", agentId: reviewerAgentId }],
+        },
+      ],
+    })!;
+    const issue = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      companyId: "company-1",
+      status: "in_review",
+      statusVersion: 4,
+      assigneeAgentId: reviewerAgentId,
+      assigneeUserId: null,
+      responsibleUserId: "local-board",
+      createdByUserId: "local-board",
+      identifier: "PAP-1006",
+      title: "Escalated review",
+      executionPolicy: policy,
+      executionState: {
+        status: "pending",
+        currentStageId: "11111111-1111-4111-8111-111111111111",
+        currentStageIndex: 0,
+        currentStageType: "review",
+        currentParticipant: { type: "agent", agentId: reviewerAgentId },
+        returnAssignee: { type: "agent", agentId: coderAgentId },
+        completedStageIds: [],
+        lastDecisionId: null,
+        lastDecisionOutcome: "changes_requested",
+        changesRequestedCount: 2,
+      },
+    };
+    mockReviewEscalationAgentId.mockResolvedValue(ceoAgentId);
+    mockIssueService.addComment.mockResolvedValue({
+      id: "66666666-6666-4666-8666-666666666666",
+      issueId: issue.id,
+      companyId: "company-1",
+      body: "Round three: two findings remain",
+      createdAt: new Date(),
+    });
+
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...issue,
+      ...patch,
+      statusVersion: 5,
+      updatedAt: new Date(),
+    }));
+
+    const res = await request(await createApp({
+      type: "agent",
+      agentId: reviewerAgentId,
+      companyId: "company-1",
+      runId: "55555555-5555-4555-8555-555555555555",
+    }))
+      .patch("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+      .send({ status: "in_progress", comment: "Round three: two findings remain" });
+
+    expect(res.status).toBe(200);
+    expect(mockReviewEscalationAgentId).toHaveBeenCalledWith(expect.anything(), "company-1");
+    expect(mockIssueService.update).toHaveBeenCalledWith(
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      expect.objectContaining({
+        status: "in_review",
+        assigneeAgentId: ceoAgentId,
+        assigneeUserId: null,
+        executionState: expect.objectContaining({
+          status: "pending",
+          currentParticipant: expect.objectContaining({ type: "agent", agentId: ceoAgentId }),
+          changesRequestedCount: 3,
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(mockDecisionInsertValues).toHaveBeenCalledWith(expect.objectContaining({ outcome: "changes_requested" }));
+    await vi.waitFor(() => expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+      ceoAgentId,
+      expect.objectContaining({ reason: "execution_review_requested",
+        stageHandoff: { statusVersion: 5, stateDigest: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      }),
+    ));
   });
 
   it("allows an agent-authored in_review transition with a scheduled monitor", async () => {

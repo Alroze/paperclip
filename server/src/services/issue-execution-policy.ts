@@ -53,6 +53,7 @@ type TransitionInput = {
   commentBody?: string | null;
   reviewRequest?: IssueExecutionState["reviewRequest"] | null;
   monitorExplicitlyUpdated?: boolean;
+  reviewEscalationAgentId?: string | null;
 };
 
 type TransitionResult = {
@@ -459,6 +460,26 @@ function reviewEscalationUserId(issue: IssueLike): string | null {
   return null;
 }
 
+function reviewEscalationPrincipal(input: {
+  issue: IssueLike;
+  stage: IssueExecutionStage;
+  actor: IssueExecutionStagePrincipal | null;
+  returnAssignee: IssueExecutionStagePrincipal | null;
+  escalationAgentId?: string | null;
+}): IssueExecutionStagePrincipal | null {
+  const agentId = input.escalationAgentId?.trim();
+  if (agentId) {
+    const agent: IssueExecutionStagePrincipal = { type: "agent", agentId, userId: null };
+    const usable =
+      !principalsEqual(agent, input.actor) &&
+      !(input.returnAssignee && principalsEqual(agent, input.returnAssignee)) &&
+      !stageHasParticipant(input.stage, agent);
+    if (usable) return agent;
+  }
+  const userId = reviewEscalationUserId(input.issue);
+  return userId ? { type: "user", agentId: null, userId } : null;
+}
+
 function findStageById(policy: IssueExecutionPolicy, stageId: string | null | undefined) {
   if (!stageId) return null;
   return policy.stages.find((stage) => stage.id === stageId) ?? null;
@@ -737,7 +758,6 @@ function applyIssueExecutionStageTransition(input: TransitionInput): TransitionR
     // PATCH, so the hold is sticky until the escalated human decides — their
     // own decisions fall through to the participant decision branch below.
     const escalatedHold =
-      currentParticipant.type === "user" &&
       !stageHasParticipant(activeStage, currentParticipant) &&
       (existingState?.changesRequestedCount ?? 0) >= resolveMaxReviewRounds(input.policy);
     if (escalatedHold && !principalsEqual(currentParticipant, actor)) {
@@ -879,13 +899,25 @@ function applyIssueExecutionStageTransition(input: TransitionInput): TransitionR
         };
         // Human decisions reset the round counter: the cap exists to stop
         // unattended agent↔agent ping-pong, not to limit human review.
+        const maxRounds = resolveMaxReviewRounds(input.policy);
         const actorIsHuman = actor?.type === "user";
-        const nextRounds = actorIsHuman ? 0 : (existingState.changesRequestedCount ?? 0) + 1;
-        if (!actorIsHuman && nextRounds >= resolveMaxReviewRounds(input.policy)) {
-          const escalationUserId = reviewEscalationUserId(input.issue);
-          if (escalationUserId) {
+        const actorIsEscalatedReviewer =
+          !stageHasParticipant(activeStage, currentParticipant) &&
+          (existingState.changesRequestedCount ?? 0) >= maxRounds;
+        const resetsRounds = actorIsHuman || actorIsEscalatedReviewer;
+        const nextRounds = resetsRounds ? 0 : (existingState.changesRequestedCount ?? 0) + 1;
+        if (!resetsRounds && nextRounds >= maxRounds) {
+          const escalationParticipant = reviewEscalationPrincipal({
+            issue: input.issue,
+            stage: activeStage,
+            actor,
+            returnAssignee: existingState.returnAssignee,
+            escalationAgentId: input.reviewEscalationAgentId,
+          });
+          if (escalationParticipant) {
             // Rounds exhausted: keep the stage pending but hand it to the
-            // responsible human instead of bouncing back to the implementer.
+            // company's CEO agent (else the responsible human) instead of
+            // bouncing back to the implementer.
             // The recorded changes-requested decision carries the reviewer's
             // reasoning; the human approves, requests changes (resetting the
             // counter), or re-scopes.
@@ -894,7 +926,7 @@ function applyIssueExecutionStageTransition(input: TransitionInput): TransitionR
               previous: existingState,
               policy: input.policy,
               stage: activeStage,
-              participant: { type: "user", agentId: null, userId: escalationUserId },
+              participant: escalationParticipant,
               returnAssignee: existingState.returnAssignee,
               reviewRequest: effectiveReviewRequest,
               changesRequestedCount: nextRounds,
