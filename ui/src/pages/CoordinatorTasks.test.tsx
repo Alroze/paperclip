@@ -615,6 +615,17 @@ describe("Coordinator tasks using the proposed table", () => {
     for (const workspaceId of ["first", "second"]) expect(mocks.list).toHaveBeenCalledWith("company", expect.objectContaining({ workspaceId, offset: 200 }), expect.anything());
     expect(Array.from(host.querySelectorAll("button")).some(button => button.textContent === "Load more tasks")).toBe(false);
   });
+  it("Load all fetches every remaining page in turn and then hides the paging buttons", async () => {
+    const page = (count: number, prefix: string) => Array.from({ length: count }, (_, index) => createIssue({ id: `${prefix}-${index}`, companyId: "company", parentId: null }));
+    mocks.list.mockImplementation(async (_company, filters) => filters.offset === 0 ? page(200, "a") : filters.offset === 200 ? page(200, "b") : filters.offset === 400 ? page(3, "c") : []);
+    await mount("/issues");
+    expect(host.querySelectorAll("[data-task-id]")).toHaveLength(200);
+    flushSync(() => Array.from(host.querySelectorAll("button")).find(button => button.textContent === "Load all")!.click());
+    await vi.waitFor(() => expect(host.querySelectorAll("[data-task-id]")).toHaveLength(403));
+    for (const offset of [200, 400]) expect(mocks.list).toHaveBeenCalledWith("company", expect.objectContaining({ offset }), expect.anything());
+    expect(mocks.list).not.toHaveBeenCalledWith("company", expect.objectContaining({ offset: 600 }), expect.anything());
+    expect(Array.from(host.querySelectorAll("button")).some(button => ["Load all", "Load more tasks"].includes(button.textContent ?? ""))).toBe(false);
+  });
   it("retains workspace scope when switching to Needs attention", async () => {
     const other = createIssue({ id: "other-workspace", companyId: "company", parentId: null, executionWorkspaceId: "other-workspace" });
     mocks.attention.mockResolvedValue({ taskIds: [pending.id, other.id] });

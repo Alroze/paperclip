@@ -86,6 +86,14 @@ describe("TaskList progressive rendering", () => {
     expect([...rows()].map(row => row.getAttribute("data-issue-row-details"))).toEqual(["earlier", "later"]);
   });
 
+  it("Show all reveals every loaded row and removes the paging row", async () => {
+    await render(tasks(400));
+    expect(rows()).toHaveLength(100);
+    await act(async () => Array.from(host.querySelectorAll("button")).find(b => b.textContent === "Show all")!.click());
+    expect(rows()).toHaveLength(400);
+    expect(Array.from(host.querySelectorAll("button")).some(b => b.textContent === "Show more tasks" || b.textContent === "Show all")).toBe(false);
+  });
+
   it("bounds the first render, reveals batches, and retains mounted rows through enrichment and append", async () => {
     const items = tasks(400);
     await render(items);

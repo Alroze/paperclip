@@ -20,6 +20,7 @@ export function useTaskRowBudget(rowIds: readonly string[], viewKey: string) {
   const hasMore = rowIds.length > limit;
   const sentinel = useRef<HTMLDivElement>(null);
   const loadMore = () => setBudget({ viewKey, key, ids: rowIds, limit: limit + ROW_BATCH });
+  const showAll = () => setBudget({ viewKey, key, ids: rowIds, limit: Math.max(limit, rowIds.length) });
 
   useEffect(() => {
     if (!sameView || budget.key !== key || budget.limit !== limit) setBudget({ viewKey, key, ids: rowIds, limit });
@@ -46,5 +47,5 @@ export function useTaskRowBudget(rowIds: readonly string[], viewKey: string) {
     return () => observer.disconnect();
   }, [hasMore, viewKey, key, limit, rowIds]);
 
-  return { limit, hasMore, sentinel, loadMore };
+  return { limit, hasMore, sentinel, loadMore, showAll };
 }

@@ -138,6 +138,22 @@ export function CoordinatorTasks({ viewControl }: { viewControl?: ReactNode } = 
     getNextPageParam: (last, _pages, offset) => last.hasNextPage ? offset + pageSize : undefined,
     enabled: !!companyId && !needsAttention && (!archivedView || !!userId),
   });
+  // Load all: fetch the remaining pages one after another. A newer run, a view
+  // change or leaving the page stops the loop; a failed page stops it too.
+  const [loadingAll, setLoadingAll] = useState(false);
+  const loadAllRun = useRef(0);
+  const loadAllView = JSON.stringify(tasks.data ? [companyId, userId, deferredQuery, participantAgentId, workspaceIds, originKind, serverSortField, serverSortDir, includeBlockedBy, view, hideArchived, inboxArchive] : null);
+  useEffect(() => () => { loadAllRun.current += 1; setLoadingAll(false); }, [loadAllView]);
+  const loadAllTasks = async () => {
+    const run = ++loadAllRun.current;
+    setLoadingAll(true);
+    try {
+      let result = await tasks.fetchNextPage();
+      while (run === loadAllRun.current && result.hasNextPage && !result.isError) result = await result.fetchNextPage();
+    } finally {
+      if (run === loadAllRun.current) setLoadingAll(false);
+    }
+  };
   const attention = useQuery({ queryKey: coordinatorAttentionTasksQueryKey(companyId!, userId),
     queryFn: () => attentionApi.taskIndex(companyId!), enabled: !!companyId && !!userId && needsAttention });
   // Resolve every pending task in bounded index batches, including tasks outside
@@ -307,7 +323,7 @@ export function CoordinatorTasks({ viewControl }: { viewControl?: ReactNode } = 
         getArchiveAction={getArchiveAction} issueLinkState={issueLinkState} collapsedIds={collection.collapsedIds} onCollapsedIdsChange={collection.setCollapsedIds} /> : empty}</div>
       {collection.layout === "board" ? collection.matchingItems.length
         ? <KanbanBoard showOverflowFades issues={collection.matchingItems.map(item => enrichIssueRow(item.issue))} agents={agents.data} onUpdateIssue={(id, data) => update.mutate({ id, data })} /> : empty : null}
-      {!needsAttention && tasks.hasNextPage ? <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground"><span>{view === "unread" ? unreadIds.size : items.length} tasks loaded. Load more to include them in filters.</span><Button variant="outline" size="sm" disabled={tasks.isFetchingNextPage} onClick={() => void tasks.fetchNextPage()}>{tasks.isFetchingNextPage ? "Loading…" : "Load more tasks"}</Button></div> : null}
+      {!needsAttention && tasks.hasNextPage ? <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground"><span>{view === "unread" ? unreadIds.size : items.length} tasks loaded. Load more to include them in filters.</span><Button variant="outline" size="sm" disabled={tasks.isFetchingNextPage || loadingAll} onClick={() => void tasks.fetchNextPage()}>{tasks.isFetchingNextPage && !loadingAll ? "Loading…" : "Load more tasks"}</Button><Button variant="ghost" size="sm" disabled={tasks.isFetchingNextPage || loadingAll} onClick={() => void loadAllTasks()}>{loadingAll ? "Loading all…" : "Load all"}</Button></div> : null}
     </>}
   </section></TruncatedTextMarqueeProvider></FlyoutAppearanceProvider>;
 }

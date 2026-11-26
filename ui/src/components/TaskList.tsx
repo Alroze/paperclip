@@ -113,7 +113,7 @@ export function TaskList({ items, allItems = items, initialColumns = defaultTask
     if (!collapsed.has(issue.id)) for (const child of childMap.get(issue.id) ?? []) collectRows(child);
   };
   roots.forEach(collectRows);
-  const { limit, hasMore, sentinel, loadMore } = useTaskRowBudget(rowIds, JSON.stringify([collectionKey ?? localKey, sort ?? defaultTaskListSort, groupBy]));
+  const { limit, hasMore, sentinel, loadMore, showAll } = useTaskRowBudget(rowIds, JSON.stringify([collectionKey ?? localKey, sort ?? defaultTaskListSort, groupBy]));
   const renderedIds = new Set(rowIds.slice(0, limit));
   const updateColumns = (next: readonly TaskListColumnId[]) => {
     setColumns(next);
@@ -196,6 +196,7 @@ export function TaskList({ items, allItems = items, initialColumns = defaultTask
       {hasMore ? <div ref={sentinel} className="flex items-center gap-3 py-2 text-sm text-muted-foreground">
         <span>Rendering {Math.min(limit, rowIds.length)} of {rowIds.length} tasks</span>
         <Button variant="outline" size="sm" onClick={loadMore}>Show more tasks</Button>
+        <Button variant="ghost" size="sm" onClick={showAll}>Show all</Button>
       </div> : null}
       {preloadCompanyId && preloadRefs.length ? <TaskChatPreload companyId={preloadCompanyId} refs={preloadRefs} /> : null}
     </TaskListViewport>
