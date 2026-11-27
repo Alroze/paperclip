@@ -14,6 +14,7 @@ import {
   plugins,
 } from "@paperclipai/db";
 import type { PaperclipPluginManifestV1 } from "@paperclipai/shared";
+import { PLUGIN_DATABASE_CORE_READ_TABLES } from "@paperclipai/shared";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -127,6 +128,13 @@ describe("plugin database SQL validation", () => {
     expect(() =>
       validatePluginRuntimeExecute("UPDATE public.issues SET title = $1", "plugin_test")
     ).toThrow(/namespace/i);
+  });
+
+  it("lets a plugin that declares issue_recovery_actions read it, and no other plugin", () => {
+    const query = "SELECT a.id FROM public.issue_recovery_actions a WHERE a.status = $1";
+    expect(() => validatePluginRuntimeQuery(query, "plugin_test", ["issues", "issue_recovery_actions"])).not.toThrow();
+    expect(() => validatePluginRuntimeQuery(query, "plugin_test", ["issues"])).toThrow();
+    expect(PLUGIN_DATABASE_CORE_READ_TABLES).toContain("issue_recovery_actions");
   });
 
   it("targets anonymous DO blocks without rejecting do-prefixed aliases", () => {

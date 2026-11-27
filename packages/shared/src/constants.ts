@@ -1637,6 +1637,7 @@ export const PLUGIN_DATABASE_CORE_READ_TABLES = [
   "approvals",
   "issue_approvals",
   "budget_incidents",
+  "issue_recovery_actions",
 ] as const;
 export type PluginDatabaseCoreReadTable = (typeof PLUGIN_DATABASE_CORE_READ_TABLES)[number];
 
