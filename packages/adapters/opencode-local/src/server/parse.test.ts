@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseOpenCodeJsonl, isOpenCodeUnknownSessionError } from "./parse.js";
+import { parseOpenCodeJsonl, isOpenCodeUnknownSessionError, openCodeErrorStatusCodes } from "./parse.js";
 
 describe("parseOpenCodeJsonl", () => {
   it("parses assistant text, usage, cost, and errors", () => {
@@ -93,5 +93,111 @@ describe("OpenCode reported usage completeness", () => {
     const line = JSON.stringify({ type: "step_finish", part: { tokens: { input: 0, output: 0 } } });
     expect(parseOpenCodeJsonl(line)).toMatchObject({ usageReported: true, usageComplete: true, usage: { inputTokens: 0, outputTokens: 0 }, costUsd: null });
     expect(parseOpenCodeJsonl(line + '\n' + JSON.stringify({ type: "step_finish" }))).toMatchObject({ usageReported: true, usageComplete: false });
+  });
+});
+
+describe("OpenCode 2 output", () => {
+  const events = [
+  {
+    "type": "step_start",
+    "sessionID": "ses_de1281664ffeTg3LNRSMq597sc",
+    "part": {
+      "sessionID": "ses_de1281664ffeTg3LNRSMq597sc",
+      "type": "step-start"
+    }
+  },
+  {
+    "type": "tool_use",
+    "sessionID": "ses_de1281664ffeTg3LNRSMq597sc",
+    "part": {
+      "sessionID": "ses_de1281664ffeTg3LNRSMq597sc",
+      "type": "tool",
+      "tool": "shell",
+      "state": {
+        "status": "completed",
+        "input": {
+          "command": "echo hi",
+          "description": "say hi"
+        },
+        "output": "hi\n",
+        "title": "shell"
+      }
+    }
+  },
+  {
+    "type": "step_finish",
+    "sessionID": "ses_de1281664ffeTg3LNRSMq597sc",
+    "part": {
+      "sessionID": "ses_de1281664ffeTg3LNRSMq597sc",
+      "type": "step-finish",
+      "reason": "tool-calls",
+      "cost": 0,
+      "tokens": {
+        "input": 100,
+        "output": 10,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    }
+  },
+  {
+    "type": "step_start",
+    "sessionID": "ses_de1281664ffeTg3LNRSMq597sc",
+    "part": {
+      "sessionID": "ses_de1281664ffeTg3LNRSMq597sc",
+      "type": "step-start"
+    }
+  },
+  {
+    "type": "text",
+    "sessionID": "ses_de1281664ffeTg3LNRSMq597sc",
+    "part": {
+      "sessionID": "ses_de1281664ffeTg3LNRSMq597sc",
+      "type": "text",
+      "text": "hello"
+    }
+  },
+  {
+    "type": "step_finish",
+    "sessionID": "ses_de1281664ffeTg3LNRSMq597sc",
+    "part": {
+      "sessionID": "ses_de1281664ffeTg3LNRSMq597sc",
+      "type": "step-finish",
+      "reason": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 120,
+        "output": 3,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    }
+  }
+];
+
+  it("parses a recorded OpenCode 2.4 run with a shell tool call", () => {
+    const parsed = parseOpenCodeJsonl(events.map((event) => JSON.stringify(event)).join("\n"));
+    expect(parsed.sessionId).toBe("ses_de1281664ffeTg3LNRSMq597sc");
+    expect(parsed.summary).toBe("hello");
+    expect(parsed.usage).toEqual({ inputTokens: 220, cachedInputTokens: 0, outputTokens: 13 });
+    expect(parsed.costUsd).toBe(0);
+    expect(parsed.errorMessage).toBeNull();
+  });
+
+  it("reads the provider status from an OpenCode 2 error event", () => {
+    const stdout = JSON.stringify({"type": "error", "sessionID": "ses_de125dbb8ffe7Xl7dKzdLiOkli", "error": {"type": "provider.auth", "message": "Authentication required", "status": 401, "response": {"body": "{\"error\":{\"message\":\"Authentication required\"}}"}}});
+    expect(openCodeErrorStatusCodes(stdout)).toEqual([401]);
+    expect(parseOpenCodeJsonl(stdout).errorMessage).toBe("Authentication required");
+  });
+
+  it("still reads the OpenCode 1 error status", () => {
+    const stdout = JSON.stringify({ type: "error", error: { name: "APIError", data: { message: "Authentication required", statusCode: 401 } } });
+    expect(openCodeErrorStatusCodes(stdout)).toEqual([401]);
   });
 });

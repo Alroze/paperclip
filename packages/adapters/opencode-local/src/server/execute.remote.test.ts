@@ -63,6 +63,10 @@ const {
   })),
 }));
 
+vi.mock("./cli-version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cli-version.js")>()),
+  detectOpenCodeMajorVersion: vi.fn(async () => null),
+}));
 vi.mock("@paperclipai/adapter-utils/server-utils", async () => {
   const actual = await vi.importActual<typeof import("@paperclipai/adapter-utils/server-utils")>(
     "@paperclipai/adapter-utils/server-utils",

@@ -8,6 +8,11 @@ import {
   resetOpenCodeModelsCacheForTests,
 } from "./models.js";
 
+vi.mock("./cli-version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cli-version.js")>()),
+  detectOpenCodeMajorVersion: vi.fn(async () => null),
+}));
+
 describe("openCode models", () => {
   afterEach(() => {
     delete process.env.PAPERCLIP_OPENCODE_COMMAND;

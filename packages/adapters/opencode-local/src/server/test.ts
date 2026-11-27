@@ -29,6 +29,7 @@ import {
 import { discoverOpenCodeModels, ensureOpenCodeModelConfiguredAndAvailable, requireOpenCodeModelId } from "./models.js";
 import { openCodeErrorStatusCodes, parseOpenCodeJsonl } from "./parse.js";
 import { SANDBOX_INSTALL_COMMAND } from "../index.js";
+import { detectOpenCodeMajorVersion, openCodeGlobalArgs, openCodeModelArg } from "./cli-version.js";
 import { prepareOpenCodeRuntimeConfig, prepareManagedOpenCodeRemoteHomes } from "./runtime-config.js";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
@@ -386,9 +387,17 @@ export async function testEnvironment(
       const variant = asString(config.variant, "").trim();
       const probeModel = configuredModel;
 
-      const args = ["run", "--format", "json"];
-      args.push("--model", probeModel);
-      if (variant) args.push("--variant", variant);
+      const openCodeMajor = await detectOpenCodeMajorVersion({
+        runId,
+        executionTarget: runtimeTarget,
+        command,
+        cwd: runtimeCwd,
+        env: runtimeEnv,
+      });
+      const modelArg = openCodeModelArg(probeModel, variant, openCodeMajor);
+      const args = [...openCodeGlobalArgs(openCodeMajor), "run", "--format", "json"];
+      args.push("--model", modelArg.model);
+      args.push(...modelArg.variantArgs);
       if (extraArgs.length > 0) args.push(...extraArgs);
 
       // Sandbox bridges still add cold-start and transport overhead, but the

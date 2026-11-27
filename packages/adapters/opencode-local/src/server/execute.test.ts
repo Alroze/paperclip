@@ -3,12 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+vi.mock("./cli-version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cli-version.js")>()),
+  detectOpenCodeMajorVersion: vi.fn(async () => null),
+}));
 vi.mock("@paperclipai/adapter-utils/execution-target", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, runAdapterExecutionTargetProcess: vi.fn() };
 });
 
 import { ensureRemoteOpenCodeModelConfiguredAndAvailable, execute } from "./execute.js";
+import { detectOpenCodeMajorVersion } from "./cli-version.js";
 import { runAdapterExecutionTargetProcess } from "@paperclipai/adapter-utils/execution-target";
 import { createPromptContextFixture } from "@paperclipai/adapter-utils/test-fixtures/prompt-context";
 
@@ -250,6 +255,51 @@ describe("OpenCode local skill injection", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("OpenCode 2 command line", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-opencode-v2-"));
+    vi.stubEnv("XDG_CONFIG_HOME", root);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    vi.mocked(detectOpenCodeMajorVersion).mockReset();
+    vi.mocked(detectOpenCodeMajorVersion).mockResolvedValue(null);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it.each([
+    [2, false, "openai/gpt-5#high", false],
+    [1, true, "openai/gpt-5", true],
+  ])("major %s: --dir=%s, model %s, --variant=%s", async (major, hasDir, modelArg, hasVariant) => {
+    const commandPath = path.join(root, "fake-opencode-v2");
+    await fs.writeFile(commandPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    vi.mocked(detectOpenCodeMajorVersion).mockResolvedValue(major);
+    runProcessMock.mockReset();
+    runProcessMock.mockResolvedValue(probeResult({ stdout: JSON.stringify({ type: "text", sessionID: "s2", part: { text: "done" } }) }));
+    const result = await execute({
+      runId: `run-v${major}`,
+      agent: { id: "agent-1", companyId: "company-1", name: "OpenCode", adapterType: "opencode_local", adapterConfig: {} },
+      runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+      config: { command: commandPath, cwd: root, model: "openai/gpt-5", variant: "high", env: { OPENCODE_ALLOW_ALL_MODELS: "1" } },
+      context: {},
+      onLog: async () => {},
+    });
+    expect(result.exitCode).toBe(0);
+    const call = runProcessMock.mock.calls.at(-1)!;
+    const args = call[3] as string[];
+    const base = major === 2 ? ["--standalone", "run", "--format", "json"] : ["run", "--format", "json"];
+    expect(args.slice(0, base.length)).toEqual(base);
+    expect(args.includes("--dir")).toBe(hasDir);
+    expect(args[args.indexOf("--model") + 1]).toBe(modelArg);
+    expect(args.includes("--variant")).toBe(hasVariant);
+    const env = (call[4] as { env: Record<string, string> }).env;
+    if (major === 2) expect(env.PWD).toBe(root);
   });
 });
 

@@ -8,6 +8,10 @@ import type { RunProcessResult } from "@paperclipai/adapter-utils/server-utils";
 const mocks = vi.hoisted(() => ({
   process: vi.fn(), restore: vi.fn(), stop: vi.fn(),
 }));
+vi.mock("./cli-version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cli-version.js")>()),
+  detectOpenCodeMajorVersion: vi.fn(async () => null),
+}));
 vi.mock("@paperclipai/adapter-utils/execution-target", async (importOriginal) => ({
   ...await importOriginal<typeof import("@paperclipai/adapter-utils/execution-target")>(),
   ensureAdapterExecutionTargetRuntimeCommandInstalled: vi.fn(),
