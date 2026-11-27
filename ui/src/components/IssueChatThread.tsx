@@ -198,6 +198,7 @@ import {
 import { formatAssigneeUserLabel } from "../lib/assignees";
 import type { CompanyUserProfile } from "../lib/company-members";
 import { timeAgo } from "../lib/timeAgo";
+import { interruptionShowsAgentWorking } from "../lib/interruption-activity";
 import {
   isSuccessfulRunHandoffComment,
   isSuccessfulRunHandoffEscalationComment,
@@ -6771,7 +6772,7 @@ export function IssueChatThread({
                     />
                   ))
                 )}
-                {!isRunning && !startupBlocked && issueAssigneeAgentId && (submissionPending || retryPreparing || interruption?.state === "working") ? (
+                {!isRunning && !startupBlocked && issueAssigneeAgentId && (submissionPending || retryPreparing || interruptionShowsAgentWorking(interruption)) ? (
                   <TaskChatRunnerTurn items={[]} status="queued" startedAtMs={null}
                     agent={agentMap?.get(issueAssigneeAgentId)}
                     agentName={agentMap?.get(issueAssigneeAgentId)?.name}

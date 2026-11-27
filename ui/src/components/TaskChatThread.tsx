@@ -157,6 +157,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAdapterCapabilities } from "@/adapters/use-adapter-capabilities";
 import { TaskChatPresentationProvider } from "@/components/task-chat/presentation-mode";
 import { isRunStopConfirmed } from "@/lib/wait-for-stopped-runs";
+import { interruptionShowsAgentWorking } from "../lib/interruption-activity";
 
 const EMPTY_BROWSERS: TaskBrowser[] = [];
 const COMPACT_RUN_LOG_READ_LIMIT_BYTES = 32_000;
@@ -2970,7 +2971,7 @@ export function TaskChatThread(props: TaskChatThreadProps) {
     hasAgentAssignee &&
     !startupBlocked &&
     !tailRunId &&
-    (props.retryPreparing || props.interruption?.state === "working" || runnerSubmissionPending ||
+    (props.retryPreparing || interruptionShowsAgentWorking(props.interruption) || runnerSubmissionPending ||
       commentItems.some(
         (item) =>
           item.kind === "message" &&
