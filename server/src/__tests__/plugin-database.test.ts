@@ -137,6 +137,14 @@ describe("plugin database SQL validation", () => {
     expect(PLUGIN_DATABASE_CORE_READ_TABLES).toContain("issue_recovery_actions");
   });
 
+  it("lets a plugin that declares activity_log read it, and no other plugin", () => {
+    const query = "SELECT a.entity_id, a.details FROM public.activity_log a WHERE a.company_id = $1 AND a.entity_type = $2";
+    expect(() => validatePluginRuntimeQuery(query, "plugin_test", ["issues", "activity_log"])).not.toThrow();
+    expect(() => validatePluginRuntimeQuery(query, "plugin_test", ["issues"])).toThrow();
+    expect(() => validatePluginRuntimeQuery("DELETE FROM public.activity_log WHERE id = $1", "plugin_test", ["activity_log"])).toThrow();
+    expect(PLUGIN_DATABASE_CORE_READ_TABLES).toContain("activity_log");
+  });
+
   it("targets anonymous DO blocks without rejecting do-prefixed aliases", () => {
     expect(() =>
       validatePluginRuntimeQuery(
