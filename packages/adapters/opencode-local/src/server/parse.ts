@@ -1,4 +1,5 @@
 import { asString, parseJson, parseObject } from "@paperclipai/adapter-utils/server-utils";
+import { openCodeErrorStatus } from "./cli-version.js";
 
 function errorText(value: unknown): string {
   if (typeof value === "string") return value;
@@ -111,8 +112,8 @@ export function openCodeErrorStatusCodes(stdout: string): number[] {
   for (const rawLine of stdout.split(/\r?\n/)) {
     const event = parseJson(rawLine.trim());
     if (!event || asString(event.type, "") !== "error") continue;
-    const status = parseObject(parseObject(event.error).data).statusCode;
-    if (typeof status === "number" && Number.isInteger(status)) statuses.push(status);
+    const status = openCodeErrorStatus(event.error);
+    if (status !== null) statuses.push(status);
   }
   return statuses;
 }

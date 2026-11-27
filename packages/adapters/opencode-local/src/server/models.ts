@@ -7,6 +7,7 @@ import {
   runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
 import { isValidOpenCodeModelId } from "../index.js";
+import { detectOpenCodeMajorVersion, openCodeGlobalArgs } from "./cli-version.js";
 
 const MODELS_CACHE_TTL_MS = 60_000;
 const MODELS_DISCOVERY_TIMEOUT_MS = 20_000;
@@ -168,6 +169,9 @@ export async function discoverOpenCodeModels(
     }),
   );
 
+  const globalArgs = openCodeGlobalArgs(
+    await detectOpenCodeMajorVersion({ runId: "opencode-models", executionTarget: null, command, cwd, env: runtimeEnv }),
+  );
   const maxAttempts = MODELS_DISCOVERY_RETRY_DELAYS_MS.length + 1;
   let lastError: Error | undefined;
 
@@ -175,7 +179,7 @@ export async function discoverOpenCodeModels(
     const result = await runChildProcess(
       `opencode-models-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       command,
-      ["models", ...(input.refresh ? ["--refresh"] : [])],
+      [...globalArgs, "models", ...(input.refresh ? ["--refresh"] : [])],
       {
         cwd,
         env: runtimeEnv,

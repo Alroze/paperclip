@@ -55,6 +55,7 @@ import {
   resolveLegacyPaperclipDesiredSkillNames,
 } from "@paperclipai/adapter-utils/server-utils";
 import { isOpenCodeUnknownSessionError, parseOpenCodeJsonl, createOpenCodeJsonlParser } from "./parse.js";
+import { detectOpenCodeMajorVersion, isOpenCodeV2, openCodeGlobalArgs, openCodeModelArg } from "./cli-version.js";
 import {
   ensureOpenCodeModelConfiguredAndAvailable,
   isTruthyEnvFlag,
@@ -121,11 +122,20 @@ export async function ensureRemoteOpenCodeModelConfiguredAndAvailable(input: {
   const probeTimeoutSec = input.timeoutSec > 0
     ? Math.min(input.timeoutSec, defaultProbeTimeoutSec)
     : defaultProbeTimeoutSec;
+  const globalArgs = openCodeGlobalArgs(
+    await detectOpenCodeMajorVersion({
+      runId: input.runId,
+      executionTarget: input.executionTarget,
+      command: input.command,
+      cwd: input.cwd,
+      env: input.env,
+    }),
+  );
   const probe = await runAdapterExecutionTargetProcess(
     input.runId,
     input.executionTarget,
     input.command,
-    ["models"],
+    [...globalArgs, "models"],
     {
       cwd: input.cwd,
       env: input.env,
@@ -623,17 +633,26 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const printLogs = isTruthyEnvFlag(
         env.PAPERCLIP_OPENCODE_PRINT_LOGS ?? process.env.PAPERCLIP_OPENCODE_PRINT_LOGS,
       );
+      const openCodeMajor = await detectOpenCodeMajorVersion({
+        runId,
+        executionTarget: runtimeExecutionTarget,
+        command,
+        cwd: effectiveExecutionCwd,
+        env: preparedRuntimeConfig.env,
+      });
+      const openCodeV2 = isOpenCodeV2(openCodeMajor);
+      const modelArg = openCodeModelArg(model, variant, openCodeMajor);
       const buildArgs = (resumeSessionId: string | null) => {
-        const args = ["run", "--format", "json"];
+        const args = [...openCodeGlobalArgs(openCodeMajor), "run", "--format", "json"];
         if (printLogs) args.push("--print-logs");
         if (resumeSessionId) args.push("--session", resumeSessionId);
-        if (model) args.push("--model", model);
-        if (variant) args.push("--variant", variant);
+        if (modelArg.model) args.push("--model", modelArg.model);
+        args.push(...modelArg.variantArgs);
         // OpenCode prefers the inherited PWD over process.cwd(). Use the realized
         // workspace unless the operator already selected a directory explicitly.
         const optionTerminator = extraArgs.indexOf("--");
         const extraOptionArgs = optionTerminator === -1 ? extraArgs : extraArgs.slice(0, optionTerminator);
-        if (!extraOptionArgs.some((arg) => arg === "--dir" || arg.startsWith("--dir="))) {
+        if (!openCodeV2 && !extraOptionArgs.some((arg) => arg === "--dir" || arg.startsWith("--dir="))) {
           args.push("--dir", effectiveExecutionCwd);
         }
         if (extraArgs.length > 0) args.push(...extraArgs);
@@ -681,7 +700,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           ...(runtimeExecutionTarget?.kind === "remote" && runtimeExecutionTarget.transport === "sandbox"
             && runtimeExecutionTarget.providerKey === "daytona" ? { useSession: true } : {}),
           cwd,
-          env: preparedRuntimeConfig.env,
+          env: openCodeV2 ? { ...preparedRuntimeConfig.env, PWD: effectiveExecutionCwd } : preparedRuntimeConfig.env,
           stdin: prompt,
           timeoutSec,
           graceSec,
